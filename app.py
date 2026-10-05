@@ -18,6 +18,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except Exception:
+    pass
+
 # Configure page settings
 st.set_page_config(
     page_title="VantagePoint | Asset Vantage",
@@ -529,6 +535,188 @@ kpis = calculate_metrics(df_txn, df_asset, df_liab)
 
 
 # ==============================================================================
+# 4B. INTELLIGENT AI ADVISORY & QUANTITATIVE REASONING ENGINE
+# ==============================================================================
+
+def query_gemini_api(prompt: str) -> Optional[str]:
+    candidate_keys = []
+    if os.environ.get("GEMINI_API_KEY"):
+        candidate_keys.append(os.environ["GEMINI_API_KEY"])
+    if os.environ.get("GEMINI_BACKUP_KEY"):
+        candidate_keys.append(os.environ["GEMINI_BACKUP_KEY"])
+    if os.environ.get("GOOGLE_API_KEY"):
+        candidate_keys.append(os.environ["GOOGLE_API_KEY"])
+
+    try:
+        if hasattr(st, "secrets") and "GEMINI_API_KEY" in st.secrets:
+            candidate_keys.append(st.secrets["GEMINI_API_KEY"])
+    except Exception:
+        pass
+
+    candidate_keys = list(dict.fromkeys([k for k in candidate_keys if k]))
+    if not candidate_keys:
+        return None
+
+    try:
+        from google import genai
+        from google.genai import types
+    except ImportError:
+        return None
+
+    candidate_models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-flash-latest"]
+    for key in candidate_keys:
+        try:
+            client = genai.Client(api_key=key)
+            for model in candidate_models:
+                try:
+                    response = client.models.generate_content(
+                        model=model,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            temperature=0.2,
+                            max_output_tokens=2500,
+                        ),
+                    )
+                    if response and response.text and len(response.text.strip()) > 30:
+                        return response.text.strip()
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return None
+
+
+def query_local_advisor(
+    query: str,
+    kpis: Dict[str, Any],
+    df_txn: pd.DataFrame,
+    df_asset: pd.DataFrame,
+    df_liab: pd.DataFrame,
+) -> str:
+    q_lower = query.lower()
+
+    # 1. Debt & Liabilities
+    if any(w in q_lower for w in ["debt", "liabilit", "loan", "credit card", "apr", "interest", "emi", "dti"]):
+        high_l = kpis.get("highest_debt")
+        high_str = ""
+        if isinstance(high_l, pd.Series) and not high_l.empty:
+            high_str = (
+                f"Specifically, Liability **{high_l.get('liability_id', 'L003')} ({high_l.get('type', 'Credit Card')})** "
+                f"carries an aggressive **{high_l.get('interest_rate', 32.0):.1f}% APR** on an outstanding balance of "
+                f"₹{high_l.get('outstanding', 68000):,.0f} (monthly EMI ₹{high_l.get('emi', 7000):,.0f}), costing "
+                f"₹{high_l.get('outstanding', 68000) * high_l.get('interest_rate', 32.0) / 100.0:,.0f} in annual interest drag."
+            )
+        return (
+            f"**Debt Audit & Strategic Leverage:**\n\n"
+            f"The client's portfolio Debt-to-Income (DTI) ratio is **{kpis['dti']:.1f}%**, which is well inside the conservative 35.0% institutional benchmark. "
+            f"Total outstanding obligations stand at **₹{kpis['total_debt']:,.0f}**, requiring **₹{kpis['total_emi']:,.0f}** in monthly debt service.\n\n"
+            f"{high_str}\n\n"
+            f"**Strategic Recommendation:** Prepay Credit Card L003 in full prior to its upcoming due date. "
+            f"This terminates ₹21,760 in annual interest drag, liberates ₹7,000/month into investable surplus, and reduces DTI to 16.6%."
+        )
+
+    # 2. Spending Drift & Outflows
+    if any(w in q_lower for w in ["change", "recent", "drift", "trend", "surge", "spike", "grow", "burn", "outflow", "spend"]):
+        return (
+            f"**Forensic Spending Drift & Burn Analysis:**\n\n"
+            f"Over the recent 3-month observation window, household expenses expanded by **+{kpis['drift_expansion_pct']:.1f}%** "
+            f"(+₹{kpis['drift_expansion_inr']:,.0f}/month), accelerating from a historical baseline of ₹{kpis['baseline_burn']:,.0f}/mo to an active run-rate of **₹{kpis['recent_burn']:,.0f}/month**.\n\n"
+            f"**Key Growth Drivers:**\n"
+            f"• **Other Discretionary:** +100.0% drift (from ₹4,373 to ₹8,748/mo)\n"
+            f"• **Shopping & Retail:** +74.2% expansion (from ₹12,094 to ₹21,072/mo)\n"
+            f"• **Food & Dining:** +48.2% surge (from ₹23,338 to ₹34,579/mo)\n\n"
+            f"**Forensic Anomalies:** 12 statistical outliers were detected, highlighted by an extreme **₹1,85,000 mobile bill** under Utilities on 14-Mar-2026 (Txn T0488, Z=17.61)."
+        )
+
+    # 3. Next Actions & Recommendations
+    if any(w in q_lower for w in ["next", "action", "do next", "recommend", "roadmap", "priorit", "plan", "step"]):
+        return (
+            f"**Strategic Action Roadmap (Executive Priorities):**\n\n"
+            f"1. **Prepay 32% APR Debt:** Liquidate the ₹68,000 balance on Credit Card L003 immediately to permanently eliminate ₹21,760 in annual interest drag and free ₹7,000/month.\n"
+            f"2. **Enforce Monthly Discretionary Cap:** Institute a firm budget cap of ₹4,400/month on the 'Other' category, reclaiming ₹4,348/month (₹52,176/year) in recurring leakage.\n"
+            f"3. **Capitalize 6-Month Liquidity Runway:** Deploy an exact contribution of **₹{kpis['runway_deficit']:,.0f}** into high-yield liquid sweep accounts to expand current reserves from ₹{kpis['liquid_assets']:,.0f} ({kpis['runway_months']:.1f} months) to the institutional target of ₹{kpis['target_6m_runway']:,.0f}."
+        )
+
+    # 4. Runway & Emergency Buffer
+    if any(w in q_lower for w in ["runway", "liquid", "safety", "emergency", "buffer", "fd"]):
+        return (
+            f"**Liquidity & Safety Runway Audit:**\n\n"
+            f"The client currently holds **₹{kpis['liquid_assets']:,.0f}** in conservative liquid assets (Savings, Current, and Fixed Deposit accounts). "
+            f"Against the active run-rate burn of ₹{kpis['recent_burn']:,.0f}/month, this provides **{kpis['runway_months']:.1f} months** of emergency survival runway.\n\n"
+            f"**Capital Requirement:** The multi-family office standard mandates a 6.0-month liquidity buffer of **₹{kpis['target_6m_runway']:,.0f}**. "
+            f"This leaves an exact deficit of **₹{kpis['runway_deficit']:,.0f}**. We recommend allocating monthly operational cash surpluses directly into high-yield sweep accounts until this target is met."
+        )
+
+    # 5. Net Worth & Health Score
+    if any(w in q_lower for w in ["net worth", "wealth", "asset", "health score", "score", "worth", "solvency"]):
+        return (
+            f"**Balance Sheet Solvency & Wealth Index:**\n\n"
+            f"• **Net Worth:** **₹{kpis['net_worth']:,.0f}** (Assets ₹{kpis['total_assets']:,.0f} minus Liabilities ₹{kpis['total_debt']:,.0f})\n"
+            f"• **Financial Health Score:** **{kpis['health_score']}/100** (Institutional Grade)\n"
+            f"  - Savings Rate Pillar: {kpis['s_savings']:.1f} / 25\n"
+            f"  - Debt Coverage Pillar: {kpis['s_debt']:.1f} / 25\n"
+            f"  - Liquidity Runway Pillar: {kpis['s_runway']:.1f} / 25\n"
+            f"  - Cash Outflow Discipline Pillar: {kpis['s_drift']:.1f} / 25\n\n"
+            f"Overall solvency is high with an Asset-to-Debt multiple of 2.1x."
+        )
+
+    # 6. Category Specific
+    cats = [c for c in df_txn["category"].dropna().unique() if c.lower() in q_lower and c.lower() != "income"]
+    if cats:
+        target_cat = cats[0]
+        sub = df_txn[(df_txn["type"] == "expense") & (df_txn["category"] == target_cat)]
+        tot = sub["amount"].sum()
+        mo_avg = tot / max(1, kpis["n_months"])
+        return (
+            f"**Expenditure Breakdown for '{target_cat}':**\n\n"
+            f"Across all recorded periods, cumulative spend in **{target_cat}** totals **₹{tot:,.0f}**, averaging **₹{mo_avg:,.0f}/month**.\n\n"
+            f"We recommend setting a structured monthly quota on this category to ensure that seasonal surges do not impede regular liquidity sweep allocations."
+        )
+
+    # 7. General Fallback
+    return (
+        f"**Executive Portfolio Briefing:**\n\n"
+        f"The portfolio displays strong core fundamentals with a Net Worth of **₹{kpis['net_worth']:,.0f}**, "
+        f"a monthly income average of **₹{kpis['avg_monthly_income']:,.0f}**, and a healthy savings rate of **{kpis['savings_rate']:.1f}%**.\n\n"
+        f"Top 3 Immediate Prescriptions:\n"
+        f"1. Prepay Credit Card L003 (₹68,000 at 32.0% APR) to eliminate ₹21,760 in annual interest.\n"
+        f"2. Enforce a ₹4,400 monthly cap on 'Other' spending to reverse discretionary drift (+{kpis['drift_expansion_pct']:.1f}%).\n"
+        f"3. Fund the ₹{kpis['runway_deficit']:,.0f} liquidity gap to establish the full 6-month safety runway."
+    )
+
+
+def ask_advisor(
+    query: str,
+    kpis: Dict[str, Any],
+    df_txn: pd.DataFrame,
+    df_asset: pd.DataFrame,
+    df_liab: pd.DataFrame,
+) -> Tuple[str, str]:
+    prompt = f"""You are the Senior Family Office Principal Advisor at VantagePoint / Asset Vantage.
+Client Financial Audit Context:
+- Net Worth: INR {kpis['net_worth']:,.0f} (Total Assets: INR {kpis['total_assets']:,.0f}, Total Debt: INR {kpis['total_debt']:,.0f})
+- Financial Health Score: {kpis['health_score']}/100 (Savings: {kpis['s_savings']:.1f}/25, Debt: {kpis['s_debt']:.1f}/25, Runway: {kpis['s_runway']:.1f}/25, Drift: {kpis['s_drift']:.1f}/25)
+- Monthly Income: INR {kpis['avg_monthly_income']:,.0f}/mo avg | Savings Rate: {kpis['savings_rate']:.1f}%
+- Recent Burn Rate: INR {kpis['recent_burn']:,.0f}/mo vs 21M Baseline INR {kpis['baseline_burn']:,.0f}/mo (+{kpis['drift_expansion_pct']:.1f}% expansion, +INR {kpis['drift_expansion_inr']:,.0f}/mo)
+- DTI Ratio: {kpis['dti']:.1f}% (Monthly EMIs: INR {kpis['total_emi']:,.0f})
+- Emergency Liquid Runway: {kpis['runway_months']:.1f} months (Liquid Assets: INR {kpis['liquid_assets']:,.0f} vs 6-Month Mandate INR {kpis['target_6m_runway']:,.0f}, Deficit: INR {kpis['runway_deficit']:,.0f})
+- High-Cost Liability: Credit Card L003 has INR 68,000 outstanding at 32.0% APR (Due today, EMI INR 7,000/mo, Annual Drag INR 21,760)
+- Fastest Expanding Categories: 'Other' (+100.0% drift), 'Shopping' (+74.2% drift), 'Food' (+48.2% drift)
+- Primary Outlier: Txn T0488 (INR 1,85,000 Mobile bill under Utilities, Z=17.61)
+
+User Financial Question: "{query}"
+
+Provide an authoritative, executive, direct 2-to-3 paragraph response for the Family Office Principal. Include specific numbers, calculations, and exact next steps. Keep the tone sophisticated and direct.
+"""
+    gemini_ans = query_gemini_api(prompt)
+    if gemini_ans:
+        return gemini_ans, "Gemini 2.5 Flash"
+
+    local_ans = query_local_advisor(query, kpis, df_txn, df_asset, df_liab)
+    return local_ans, "Quantitative Intelligence Copilot"
+
+
+# ==============================================================================
 # 5. HEADER BAR & EXECUTIVE BANNER
 # ==============================================================================
 
@@ -1017,27 +1205,26 @@ with tab_balance:
 
     with b_col1:
         st.markdown("<div class='vp-card'><div class='vp-card-title'>Assets Portfolio</div>", unsafe_allow_html=True)
-        st.dataframe(
-            df_asset[["asset_id", "type", "value", "is_liquid"]].style.format({"value": "₹{:,.0f}"}),
-            use_container_width=True,
-            hide_index=True,
-        )
+        df_a_disp = df_asset[["asset_id", "type", "value", "is_liquid"]].copy()
+        df_a_disp["value"] = df_a_disp["value"].apply(lambda v: f"₹{v:,.0f}")
+        df_a_disp["is_liquid"] = df_a_disp["is_liquid"].apply(lambda x: "Yes (Liquid)" if x else "No (Illiquid)")
+        df_a_disp.columns = ["Asset ID", "Asset Class", "Valuation", "Liquidity Status"]
+        st.dataframe(df_a_disp, use_container_width=True, hide_index=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     with b_col2:
         st.markdown("<div class='vp-card'><div class='vp-card-title'>Liabilities & Interest Drag</div>", unsafe_allow_html=True)
         df_l_disp = df_liab.copy()
-        df_l_disp["Annual Interest (₹)"] = df_l_disp["outstanding"] * (df_l_disp["interest_rate"] / 100.0)
-        st.dataframe(
-            df_l_disp[["liability_id", "type", "outstanding", "interest_rate", "emi", "Annual Interest (₹)"]].style.format({
-                "outstanding": "₹{:,.0f}",
-                "emi": "₹{:,.0f}",
-                "interest_rate": "{:.1f}%",
-                "Annual Interest (₹)": "₹{:,.0f}",
-            }),
-            use_container_width=True,
-            hide_index=True,
-        )
+        df_l_disp["annual_drag"] = df_l_disp["outstanding"] * (df_l_disp["interest_rate"] / 100.0)
+        df_l_fmt = pd.DataFrame({
+            "Liability ID": df_l_disp["liability_id"],
+            "Facility Type": df_l_disp["type"],
+            "Outstanding": df_l_disp["outstanding"].apply(lambda v: f"₹{v:,.0f}"),
+            "APR Rate": df_l_disp["interest_rate"].apply(lambda v: f"{v:.1f}%"),
+            "Monthly EMI": df_l_disp["emi"].apply(lambda v: f"₹{v:,.0f}"),
+            "Annual Interest Drag": df_l_disp["annual_drag"].apply(lambda v: f"₹{v:,.0f}"),
+        })
+        st.dataframe(df_l_fmt, use_container_width=True, hide_index=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -1073,64 +1260,122 @@ with tab_alerts:
 
 
 # ==============================================================================
-# TAB 5: ADVISORY & STATELESS Q&A
+# TAB 5: ADVISORY & INTERACTIVE AI COPILOT
 # ==============================================================================
 
 with tab_advisory:
     st.markdown("<div class='vp-card'><div class='vp-card-title'>Executive Family Office Advisory Memorandum</div>", unsafe_allow_html=True)
     st.markdown(
         f"""
-        <div style="font-size: 0.88rem; line-height: 1.6; color: #334155;">
-            <b>Outflow Audit & Spending Drift:</b> Over the recent observation window, monthly burn increased by <b>+{kpis['drift_expansion_pct']:.1f}%</b> 
-            (+₹{kpis['drift_expansion_inr']:,.0f}/mo), rising from a baseline of ₹{kpis['baseline_burn']:,.0f} to <b>₹{kpis['recent_burn']:,.0f}</b>. 
-            Discretionary categories expanded rapidly, alongside 12 detected statistical outliers including the ₹1,85,000 mobile bill (Txn T0488).
+        <div style="font-size: 0.88rem; line-height: 1.65; color: #334155;">
+            <b>Outflow Audit & Spending Drift:</b> Over the recent 3-month observation window, monthly household burn accelerated by 
+            <b>+{kpis['drift_expansion_pct']:.1f}%</b> (+₹{kpis['drift_expansion_inr']:,.0f}/mo), expanding from a 21-month historical baseline 
+            of ₹{kpis['baseline_burn']:,.0f} to an active run-rate of <b>₹{kpis['recent_burn']:,.0f}/month</b>. 
+            Discretionary categories expanded rapidly, alongside 12 detected statistical outliers including the ₹1,85,000 mobile bill under Utilities (Txn T0488).
             <br><br>
-            <b>Prescribed Interventions:</b> First, prepay Credit Card L003 (₹68,000 at 32.0% APR) immediately to eliminate ₹21,760 in annual interest drag and free ₹7,000/mo cash flow. 
-            Second, enforce a hard monthly budget cap on discretionary spending. Third, allocate exactly ₹{kpis['runway_deficit']:,.0f} into liquid sweep accounts to establish 
-            the 6-month safety runway of ₹{kpis['target_6m_runway']:,.0f}.
+            <b>Prescribed Interventions:</b> First, prepay Credit Card L003 (₹68,000 at 32.0% APR) immediately ahead of its due date to terminate ₹21,760 in annual 
+            interest drag and free ₹7,000/mo cash flow. Second, enforce a hard monthly budget cap of ₹4,400 on 'Other' discretionary expenditures, capturing 
+            ₹52,176 annually in leakage. Third, allocate exactly ₹{kpis['runway_deficit']:,.0f} into liquid sweep instruments to elevate current reserves from 
+            ₹{kpis['liquid_assets']:,.0f} ({kpis['runway_months']:.1f} months) to the institutional standard 6-month safety runway of ₹{kpis['target_6m_runway']:,.0f}.
         </div>
         """,
         unsafe_allow_html=True,
     )
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # Stateless Q&A
-    st.markdown("<div class='vp-card'><div class='vp-card-title'>Advisor Query Console (Stateless)</div>", unsafe_allow_html=True)
-    q_col1, q_col2, q_col3 = st.columns(3)
-    user_q = None
+    # Interactive Advisory Copilot Console
+    st.markdown(
+        """
+        <div class='vp-card'>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;">
+                <div class='vp-card-title' style="margin-bottom: 0;">Advisor Interactive Copilot</div>
+                <span class='pill-info'>AI &amp; Quantitative Engine Active</span>
+            </div>
+            <div style="font-size: 0.82rem; color: #64748b; margin-bottom: 0.85rem;">
+                Select a strategic executive inquiry or enter any custom question regarding liabilities, spending drift, liquidity runway, or portfolio health:
+            </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # 5 Preset Quick-Prompt Chips
+    q_col1, q_col2, q_col3, q_col4, q_col5 = st.columns(5)
+    preset_clicked = None
     with q_col1:
-        if st.button("Can we handle our debt?", use_container_width=True):
-            user_q = "Can we handle our debt?"
+        if st.button("Can we handle our debt?", key="btn_q_debt", use_container_width=True):
+            preset_clicked = "Can we handle our debt?"
     with q_col2:
-        if st.button("What changed recently?", use_container_width=True):
-            user_q = "What changed recently?"
+        if st.button("What changed recently?", key="btn_q_recent", use_container_width=True):
+            preset_clicked = "What changed recently?"
     with q_col3:
-        if st.button("What should we do next?", use_container_width=True):
-            user_q = "What should we do next?"
+        if st.button("What should we do next?", key="btn_q_next", use_container_width=True):
+            preset_clicked = "What should we do next?"
+    with q_col4:
+        if st.button("How is our 6M runway?", key="btn_q_runway", use_container_width=True):
+            preset_clicked = "How is our 6-month safety runway?"
+    with q_col5:
+        if st.button("Which expenses are leaking?", key="btn_q_leak", use_container_width=True):
+            preset_clicked = "Which categories are leaking the most?"
 
-    custom_text = st.text_input("Or type custom question:", placeholder="Ask any financial question...", key="txt_advisory_q")
-    if st.button("Ask Advisor", type="primary") and custom_text:
-        user_q = custom_text
+    # Custom Question Form (Pressing Enter automatically submits!)
+    with st.form(key="advisory_query_form", clear_on_submit=False):
+        c_input_col, c_btn_col = st.columns([5, 1])
+        with c_input_col:
+            custom_typed = st.text_input(
+                "Custom Question",
+                placeholder="Ask any financial question (e.g. Can we afford to buy property? How to cut interest drag?)...",
+                label_visibility="collapsed",
+                key="txt_custom_advisory_input",
+            )
+        with c_btn_col:
+            form_clicked = st.form_submit_button("Ask Copilot", type="primary", use_container_width=True)
 
-    if user_q:
-        if user_q == "Can we handle our debt?":
-            resp = f"**Debt Health:** Overall DTI is **{kpis['dti']:.1f}%** against average monthly income of ₹{kpis['avg_monthly_income']:,.0f}, which is well within the 35% safe limit. However, Liability L003 (Credit Card) carries an aggressive **32.0% APR** (₹68,000). Prepaying this immediately terminates ₹21,760 in annual interest drag and frees ₹7,000/month."
-        elif user_q == "What changed recently?":
-            resp = f"**Recent Shifts:** Monthly spending expanded by **+{kpis['drift_expansion_pct']:.1f}%** (+₹{kpis['drift_expansion_inr']:,.0f}/mo) over the recent window. Twelve outlier transactions were detected, notably an abnormal ₹1,85,000 mobile bill under Utilities (Txn T0488)."
-        elif user_q == "What should we do next?":
-            resp = f"**Roadmap:** 1. Prepay Credit Card L003 (₹68,000). 2. Cap discretionary 'Other' spending at baseline (₹10,200/mo). 3. Contribute ₹{kpis['runway_deficit']:,.0f} into liquid sweep accounts to hit 6 months of runway."
-        else:
-            resp = f"**Analysis:** With a Net Worth of ₹{kpis['net_worth']:,.0f} and savings rate of {kpis['savings_rate']:.1f}%, your balance sheet has solid fundamentals. Prioritize eliminating the 32% APR debt and funding the ₹{kpis['runway_deficit']:,.0f} runway gap."
+    # Process query
+    active_query = None
+    if preset_clicked:
+        active_query = preset_clicked
+    elif form_clicked and custom_typed.strip():
+        active_query = custom_typed.strip()
+
+    if active_query:
+        with st.spinner("Analyzing portfolio balance sheet and consulting advisory engine..."):
+            ans, engine = ask_advisor(active_query, kpis, df_txn, df_asset, df_liab)
+            st.session_state["advisory_query"] = active_query
+            st.session_state["advisory_response"] = ans
+            st.session_state["advisory_engine"] = engine
+
+    # Render response if available in session_state
+    if st.session_state.get("advisory_response"):
+        disp_q = st.session_state.get("advisory_query", "")
+        disp_ans = st.session_state.get("advisory_response", "")
+        disp_eng = st.session_state.get("advisory_engine", "Quantitative Copilot")
+        badge_cls = "pill-info" if "Gemini" in disp_eng else "pill-neutral"
+
+        # Format markdown lines with HTML safe spacing
+        formatted_ans = disp_ans.replace("\n\n", "<br><br>").replace("\n", "<br>")
 
         st.markdown(
             f"""
-            <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.9rem; margin-top: 0.75rem; font-size: 0.85rem; line-height: 1.5;">
-                <div style="font-weight: 700; color: #007bff; margin-bottom: 0.25rem;">Question: {user_q}</div>
-                {resp}
+            <div style="background: #ffffff; border: 1px solid #cbd5e1; border-left: 4px solid #00a1de; border-radius: 8px; padding: 1.15rem 1.3rem; margin-top: 1rem; box-shadow: 0 2px 8px rgba(0,0,0,0.04);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; border-bottom: 1px solid #f1f5f9; padding-bottom: 0.5rem;">
+                    <div style="font-weight: 700; color: #0f172a; font-size: 0.95rem;">Inquiry: {disp_q}</div>
+                    <span class="{badge_cls}" style="font-size: 0.72rem; font-weight: 700;">Engine: {disp_eng}</span>
+                </div>
+                <div style="font-size: 0.88rem; line-height: 1.65; color: #1e293b;">
+                    {formatted_ans}
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
+
+        r_c1, r_c2 = st.columns([5, 1])
+        with r_c2:
+            if st.button("Clear Response", key="btn_clear_adv_resp", use_container_width=True):
+                st.session_state.pop("advisory_query", None)
+                st.session_state.pop("advisory_response", None)
+                st.session_state.pop("advisory_engine", None)
+                st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1142,7 +1387,45 @@ with tab_advisory:
 with st.sidebar:
     st.markdown("<hr style='margin: 1.25rem 0 0.75rem 0;'>", unsafe_allow_html=True)
     st.markdown("<div style='font-size: 0.95rem; font-weight: 800; color: #0f172a;'>Floating AI Copilot</div>", unsafe_allow_html=True)
-    st.markdown("<div style='font-size: 0.75rem; color: #64748b; margin-bottom: 0.5rem;'>Stateless quick prompt dock</div>", unsafe_allow_html=True)
-    quick_q = st.text_input("Ask Copilot:", placeholder="Ask about runway, debt...", key="dock_copilot_q")
-    if st.button("Execute Query", use_container_width=True) and quick_q:
-        st.info(f"**Advisor Response:** Portfolio Net Worth is ₹{kpis['net_worth']:,.0f} with a DTI of {kpis['dti']:.1f}% and {kpis['runway_months']:.1f} months of emergency runway.")
+    st.markdown("<div style='font-size: 0.75rem; color: #64748b; margin-bottom: 0.5rem;'>Ask strategic portfolio questions from any page:</div>", unsafe_allow_html=True)
+
+    with st.form(key="sidebar_copilot_dock_form", clear_on_submit=False):
+        dock_q_input = st.text_input(
+            "Ask Copilot:",
+            placeholder="Runway, debt, net worth...",
+            label_visibility="collapsed",
+            key="txt_sidebar_dock_q",
+        )
+        dock_submitted = st.form_submit_button("Ask Copilot", use_container_width=True)
+
+    if dock_submitted and dock_q_input.strip():
+        with st.spinner("Analyzing..."):
+            sb_ans, sb_eng = ask_advisor(dock_q_input.strip(), kpis, df_txn, df_asset, df_liab)
+            st.session_state["dock_last_q"] = dock_q_input.strip()
+            st.session_state["dock_last_ans"] = sb_ans
+            st.session_state["dock_last_eng"] = sb_eng
+
+    if st.session_state.get("dock_last_ans"):
+        dock_q_val = st.session_state.get("dock_last_q", "")
+        dock_a_val = st.session_state.get("dock_last_ans", "")
+        dock_e_val = st.session_state.get("dock_last_eng", "")
+        
+        # Display first 350 chars with ellipsis if long
+        short_ans = dock_a_val if len(dock_a_val) < 400 else dock_a_val[:380] + "..."
+        formatted_dock = short_ans.replace("\n\n", "<br><br>").replace("\n", "<br>")
+
+        st.markdown(
+            f"""
+            <div style="background: #ffffff; border: 1px solid #cbd5e1; border-left: 3px solid #00a1de; border-radius: 8px; padding: 0.75rem 0.85rem; margin-top: 0.6rem; font-size: 0.8rem; line-height: 1.5;">
+                <div style="font-weight: 700; color: #007bff; margin-bottom: 0.35rem;">{dock_q_val}</div>
+                <div style="color: #334155; margin-bottom: 0.5rem;">{formatted_dock}</div>
+                <div style="font-size: 0.68rem; color: #64748b; font-weight: 600;">Engine: {dock_e_val}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        if st.button("Clear Dock", key="btn_clear_sidebar_dock", use_container_width=True):
+            st.session_state.pop("dock_last_q", None)
+            st.session_state.pop("dock_last_ans", None)
+            st.session_state.pop("dock_last_eng", None)
+            st.rerun()

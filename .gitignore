@@ -2,6 +2,9 @@
 SYSTEM_ARCHITECTURE_AND_MATH_EXPLAINER.md
 *.private.md
 .env
+.env.*
+.streamlit/secrets.toml
+secrets.toml
 
 # Python artifacts
 __pycache__/

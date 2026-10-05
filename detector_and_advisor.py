@@ -40,10 +40,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger("AssetVantageAdvisor")
 
-# Default provided API key fallback for the challenge environment
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
+# Retrieve API keys securely from environment or .env
 DEFAULT_GEMINI_API_KEY = os.environ.get(
     "GEMINI_API_KEY",
-    os.environ.get("GOOGLE_API_KEY", "AIzaSyALaEIdDQt2NXMZM4gBTCrlfmbBUnfR3YQ")
+    os.environ.get("GEMINI_BACKUP_KEY", os.environ.get("GOOGLE_API_KEY", ""))
 )
 
 
