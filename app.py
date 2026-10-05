@@ -716,6 +716,287 @@ Provide an authoritative, executive, direct 2-to-3 paragraph response for the Fa
     return local_ans, "Quantitative Intelligence Copilot"
 
 
+def generate_advisory_chart(
+    query: str,
+    df_txn: pd.DataFrame,
+    df_asset: pd.DataFrame,
+    df_liab: pd.DataFrame,
+    kpis: Dict[str, Any],
+    view_type: Optional[str] = None,
+    with_range_slider: bool = True,
+) -> Tuple[go.Figure, str, str, str]:
+    """
+    Dynamically generates an executive Plotly chart based on user inquiry
+    or explicit metric selection.
+    Returns: (fig, title, subtitle, detected_mode)
+    """
+    q_lower = (query or "").lower()
+
+    # 1. Determine active perspective
+    if not view_type or view_type == "Auto (Query-Matched)":
+        if any(w in q_lower for w in ["debt", "liabilit", "loan", "credit card", "apr", "interest", "emi", "drag", "dti"]):
+            chosen_mode = "Liabilities & Interest Drag"
+        elif any(w in q_lower for w in ["category", "categories", "food", "shopping", "dining", "leak", "leakage", "drift", "surge", "other", "grocer", "travel"]):
+            chosen_mode = "Spending Drift & Category Breakdown"
+        elif any(w in q_lower for w in ["runway", "liquid", "safety", "emergency", "buffer", "deficit", "reserve", "cash buffer", "fd"]):
+            chosen_mode = "Liquidity Runway vs 6-Month Mandate"
+        elif any(w in q_lower for w in ["next", "action", "do next", "recommend", "roadmap", "plan", "priorit", "intervention"]):
+            chosen_mode = "Strategic Action Impact Matrix"
+        elif any(w in q_lower for w in ["net worth", "asset", "wealth", "equity", "solvency", "worth", "health score", "score", "balance sheet"]):
+            chosen_mode = "Net Worth & Multi-Asset Allocation"
+        else:
+            chosen_mode = "Monthly Cash Flow by Date"
+    else:
+        chosen_mode = view_type
+
+    # 2. Build the selected figure
+    if chosen_mode == "Monthly Cash Flow by Date":
+        df_t = df_txn.copy()
+        df_t["parsed_date"] = pd.to_datetime(df_t["date"], errors="coerce")
+        df_t["month_str"] = df_t["parsed_date"].dt.strftime("%Y-%m")
+        m_df = df_t.groupby(["month_str", "type"])["amount"].sum().unstack(fill_value=0.0).reset_index()
+        m_df["net_cash_flow"] = m_df.get("income", 0.0) - m_df.get("expense", 0.0)
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=m_df["month_str"],
+            y=m_df.get("income", 0.0),
+            name="Inflows (Income)",
+            marker_color="#10b981",
+            opacity=0.9,
+            hovertemplate="<b>%{x}</b><br>Inflows: ₹%{y:,.0f}<extra></extra>"
+        ))
+        fig.add_trace(go.Bar(
+            x=m_df["month_str"],
+            y=m_df.get("expense", 0.0),
+            name="Outflows (Expense)",
+            marker_color="#ef4444",
+            opacity=0.9,
+            hovertemplate="<b>%{x}</b><br>Outflows: ₹%{y:,.0f}<extra></extra>"
+        ))
+        fig.add_trace(go.Scatter(
+            x=m_df["month_str"],
+            y=m_df["net_cash_flow"],
+            name="Net Retained Cash Flow",
+            mode="lines+markers",
+            line=dict(color="#00a1de", width=2.5),
+            marker=dict(size=6, color="#007bff"),
+            hovertemplate="<b>%{x}</b><br>Net Retained: ₹%{y:,.0f}<extra></extra>"
+        ))
+
+        # Highlight recent 3 months drift window
+        recent_3m = m_df["month_str"].tail(3).tolist()
+        if len(recent_3m) >= 3:
+            fig.add_vrect(
+                x0=recent_3m[0], x1=recent_3m[-1],
+                fillcolor="#fef3c7", opacity=0.35,
+                layer="below", line_width=1, line_color="#f59e0b",
+                annotation_text="Recent Window (+10.8% Burn Expansion)",
+                annotation_position="top left",
+                annotation_font_size=10,
+                annotation_font_color="#b45309"
+            )
+
+        xaxis_cfg = dict(showgrid=False, tickangle=-45)
+        if with_range_slider:
+            xaxis_cfg["rangeslider"] = dict(visible=True)
+
+        fig.update_layout(
+            barmode="group",
+            height=390,
+            margin=dict(l=20, r=20, t=30, b=20),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=xaxis_cfg,
+            yaxis=dict(gridcolor="#f1f5f9", tickprefix="₹"),
+            legend=dict(orientation="h", y=1.14, x=1, xanchor="right"),
+        )
+        title = "Monthly Cash Flow & Spending Trajectory by Date (24-Month Horizon)"
+        subtitle = f"Tracking monthly income vs outflow run-rates. Over the recent 3 months, spending expanded by +{kpis['drift_expansion_pct']:.1f}% (+₹{kpis['drift_expansion_inr']:,.0f}/mo)."
+
+    elif chosen_mode == "Spending Drift & Category Breakdown":
+        df_exp = df_txn[df_txn["type"] == "expense"].copy()
+        months = sorted(df_exp["month"].dropna().unique().tolist())
+        recent_count = min(3, max(1, len(months) // 4))
+        recent_months = months[-recent_count:]
+        baseline_months = months[:-recent_count] if len(months) > recent_count else months
+
+        base_cat = df_exp[df_exp["month"].isin(baseline_months)].groupby("category")["amount"].sum() / max(1, len(baseline_months))
+        recent_cat = df_exp[df_exp["month"].isin(recent_months)].groupby("category")["amount"].sum() / max(1, len(recent_months))
+
+        cat_df = pd.DataFrame({"Baseline": base_cat, "Recent": recent_cat}).fillna(0.0)
+        cat_df["Drift_INR"] = cat_df["Recent"] - cat_df["Baseline"]
+        cat_df["Drift_Pct"] = (cat_df["Drift_INR"] / cat_df["Baseline"]) * 100.0
+        cat_df = cat_df.sort_values(by="Recent", ascending=True)
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            y=cat_df.index,
+            x=cat_df["Baseline"],
+            name="Baseline 21M Avg (₹/mo)",
+            orientation="h",
+            marker_color="#94a3b8",
+            hovertemplate="<b>%{y}</b><br>Baseline: ₹%{x:,.0f}/mo<extra></extra>"
+        ))
+        fig.add_trace(go.Bar(
+            y=cat_df.index,
+            x=cat_df["Recent"],
+            name="Recent 3M Run-Rate (₹/mo)",
+            orientation="h",
+            marker_color="#00a1de",
+            hovertemplate="<b>%{y}</b><br>Recent: ₹%{x:,.0f}/mo<extra></extra>"
+        ))
+        fig.update_layout(
+            barmode="group",
+            height=390,
+            margin=dict(l=20, r=20, t=30, b=20),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(gridcolor="#f1f5f9", tickprefix="₹"),
+            legend=dict(orientation="h", y=1.14, x=1, xanchor="right"),
+        )
+        title = "Category Expenditure Drift Analysis: Baseline vs Recent Observation"
+        subtitle = "Discretionary categories ('Other' +100.0%, 'Shopping' +74.2%, 'Food' +48.2%) represent 88% of net expansion."
+
+    elif chosen_mode == "Liabilities & Interest Drag":
+        df_l = df_liab.copy()
+        df_l["annual_drag"] = df_l["outstanding"] * (df_l["interest_rate"] / 100.0)
+        df_l["label"] = df_l["liability_id"] + "<br>(" + df_l["type"] + ")"
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=df_l["label"],
+            y=df_l["outstanding"],
+            name="Outstanding Balance (₹)",
+            marker_color="#007bff",
+            text=[f"₹{v:,.0f}" for v in df_l["outstanding"]],
+            textposition="outside",
+            hovertemplate="<b>%{x}</b><br>Outstanding: ₹%{y:,.0f}<extra></extra>"
+        ))
+        fig.add_trace(go.Bar(
+            x=df_l["label"],
+            y=df_l["annual_drag"],
+            name="Annual Interest Drag (₹)",
+            marker_color=["#ef4444" if r > 20 else "#f59e0b" for r in df_l["interest_rate"]],
+            text=[f"₹{v:,.0f} ({r:.1f}% APR)" for v, r in zip(df_l["annual_drag"], df_l["interest_rate"])],
+            textposition="outside",
+            hovertemplate="<b>%{x}</b><br>Annual Drag: ₹%{y:,.0f}<extra></extra>"
+        ))
+        fig.update_layout(
+            barmode="group",
+            height=390,
+            margin=dict(l=20, r=20, t=30, b=20),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            yaxis=dict(gridcolor="#f1f5f9", tickprefix="₹"),
+            legend=dict(orientation="h", y=1.14, x=1, xanchor="right"),
+        )
+        title = "Liabilities Capital Structure & Annual Interest Drain (APR Breakdown)"
+        subtitle = "Credit Card L003 incurs ₹21,760 in annual interest drag at 32.0% APR on a ₹68,000 balance. Prepayment eliminates this immediately."
+
+    elif chosen_mode == "Liquidity Runway vs 6-Month Mandate":
+        liq_items = df_asset[df_asset["is_liquid"] == True]
+        tot_liq = float(liq_items["value"].sum())
+        target_6m = kpis["target_6m_runway"]
+        deficit = kpis["runway_deficit"]
+
+        x_labels = liq_items["type"].tolist() + ["Total Liquid Reserves", "Capital Deficit Needed", "Target 6M Runway"]
+        y_values = liq_items["value"].tolist() + [tot_liq, deficit, target_6m]
+        colors = ["#93c5fd"] * len(liq_items) + ["#00a1de", "#f59e0b", "#10b981"]
+
+        fig = go.Figure(go.Bar(
+            x=x_labels,
+            y=y_values,
+            marker_color=colors,
+            text=[f"₹{v:,.0f}" for v in y_values],
+            textposition="outside",
+            hovertemplate="<b>%{x}</b><br>Valuation: ₹%{y:,.0f}<extra></extra>"
+        ))
+        fig.update_layout(
+            height=390,
+            margin=dict(l=20, r=20, t=30, b=20),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            yaxis=dict(gridcolor="#f1f5f9", tickprefix="₹"),
+            showlegend=False,
+        )
+        title = "Liquid Reserves vs Multi-Family Office 6-Month Safety Mandate"
+        subtitle = f"Current liquid reserves of ₹{tot_liq:,.0f} cover {kpis['runway_months']:.1f} months. An exact capital allocation of ₹{deficit:,.0f} reaches the 6-month safety threshold of ₹{target_6m:,.0f}."
+
+    elif chosen_mode == "Strategic Action Impact Matrix":
+        moves = ["1. Prepay Credit Card (L003)", "2. Cap Discretionary 'Other'", "3. Fund 6M Safety Runway"]
+        impact_yr = [21760.0, 52176.0, kpis["runway_deficit"]]
+        bar_colors = ["#10b981", "#00a1de", "#f59e0b"]
+        descriptions = [
+            "Eliminates 32% APR interest drag; frees ₹7,000/mo cash flow",
+            "Enforces ₹4,400/mo budget cap; arrests +100% surge",
+            f"Deploys ₹{kpis['runway_deficit']:,.0f} to achieve 6-month safety buffer",
+        ]
+
+        fig = go.Figure(go.Bar(
+            x=moves,
+            y=impact_yr,
+            marker_color=bar_colors,
+            text=[f"₹{v:,.0f}" for v in impact_yr],
+            textposition="outside",
+            hovertext=descriptions,
+            hovertemplate="<b>%{x}</b><br>Financial Magnitude: ₹%{y:,.0f}<br>%{hovertext}<extra></extra>"
+        ))
+        fig.update_layout(
+            height=390,
+            margin=dict(l=20, r=20, t=30, b=20),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            yaxis=dict(gridcolor="#f1f5f9", tickprefix="₹"),
+            showlegend=False,
+        )
+        title = "Prescribed Strategic Interventions & Capital Impact Matrix"
+        subtitle = "Immediate quantified annual recovery: ₹73,936/year in combined interest savings and discretionary leakage containment."
+
+    else:  # Net Worth & Multi-Asset Allocation
+        tot_assets = kpis["total_assets"]
+        tot_debt = kpis["total_debt"]
+        net_worth = kpis["net_worth"]
+
+        fig = go.Figure(data=[
+            go.Pie(
+                labels=df_asset["type"],
+                values=df_asset["value"],
+                hole=0.62,
+                domain={"x": [0.0, 0.48]},
+                marker=dict(colors=["#007bff", "#00a1de", "#10b981", "#38bdf8"]),
+                name="Assets",
+                textinfo="label+percent",
+                hovertemplate="<b>%{label}</b><br>Valuation: ₹%{value:,.0f} (%{percent})<extra></extra>",
+            ),
+            go.Pie(
+                labels=["Net Worth (Equity)", "Total Debt Obligations"],
+                values=[net_worth, tot_debt],
+                hole=0.62,
+                domain={"x": [0.52, 1.0]},
+                marker=dict(colors=["#00a1de", "#ef4444"]),
+                name="Capital Structure",
+                textinfo="label+percent",
+                hovertemplate="<b>%{label}</b><br>Amount: ₹%{value:,.0f} (%{percent})<extra></extra>",
+            ),
+        ])
+        fig.update_layout(
+            height=380,
+            margin=dict(l=20, r=20, t=30, b=20),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            annotations=[
+                dict(text="<b>Asset Classes</b>", x=0.21, y=0.5, font_size=12, font_color="#0f172a", showarrow=False),
+                dict(text="<b>Solvency: 2.1x</b>", x=0.79, y=0.5, font_size=12, font_color="#0f172a", showarrow=False),
+            ],
+            showlegend=False,
+        )
+        title = "Multi-Asset Allocation (Left) & Balance Sheet Solvency Structure (Right)"
+        subtitle = f"Total Assets: ₹{tot_assets:,.0f} | Total Liabilities: ₹{tot_debt:,.0f} | Net Worth: ₹{net_worth:,.0f}"
+
+    return fig, title, subtitle, chosen_mode
+
+
 # ==============================================================================
 # 5. HEADER BAR & EXECUTIVE BANNER
 # ==============================================================================
@@ -1348,7 +1629,7 @@ with tab_advisory:
     if st.session_state.get("advisory_response"):
         disp_q = st.session_state.get("advisory_query", "")
         disp_ans = st.session_state.get("advisory_response", "")
-        disp_eng = st.session_state.get("advisory_engine", "Quantitative Copilot")
+        disp_eng = st.session_state.get("advisory_engine", "Quantitative Intelligence Copilot")
         badge_cls = "pill-info" if "Gemini" in disp_eng else "pill-neutral"
 
         # Format markdown lines with HTML safe spacing
@@ -1369,6 +1650,58 @@ with tab_advisory:
             unsafe_allow_html=True,
         )
 
+        # Dynamic Intelligence Chart Section!
+        st.markdown(
+            """
+            <div style="margin-top: 1rem; padding: 1rem 1.25rem; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.03);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+                    <div style="font-weight: 700; color: #0f172a; font-size: 0.92rem;">Generated Portfolio Intelligence Visualization</div>
+                    <span class="pill-info" style="font-size: 0.7rem;">Interactive Analytics</span>
+                </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        c_view_sel, c_slider_chk = st.columns([3, 1])
+        with c_view_sel:
+            chosen_view = st.selectbox(
+                "Select Metric / Graph Perspective:",
+                [
+                    "Auto (Query-Matched)",
+                    "Monthly Cash Flow by Date",
+                    "Spending Drift & Category Breakdown",
+                    "Liabilities & Interest Drag",
+                    "Liquidity Runway vs 6-Month Mandate",
+                    "Net Worth & Multi-Asset Allocation",
+                    "Strategic Action Impact Matrix",
+                ],
+                key="adv_chart_selector",
+                help="Switch perspective to explore different angles of the portfolio",
+            )
+        with c_slider_chk:
+            show_slider = st.checkbox("Show Date Slider", value=True, key="adv_show_slider")
+
+        chart_fig, chart_title, chart_subtitle, detected_mode = generate_advisory_chart(
+            disp_q,
+            df_txn,
+            df_asset,
+            df_liab,
+            kpis,
+            view_type=chosen_view,
+            with_range_slider=show_slider,
+        )
+
+        st.markdown(
+            f"""
+            <div style="font-size: 0.85rem; font-weight: 600; color: #007bff; margin-top: 0.25rem;">{chart_title}</div>
+            <div style="font-size: 0.78rem; color: #64748b; margin-bottom: 0.5rem;">{chart_subtitle}</div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.plotly_chart(chart_fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
         r_c1, r_c2 = st.columns([5, 1])
         with r_c2:
             if st.button("Clear Response", key="btn_clear_adv_resp", use_container_width=True):
@@ -1376,6 +1709,32 @@ with tab_advisory:
                 st.session_state.pop("advisory_response", None)
                 st.session_state.pop("advisory_engine", None)
                 st.rerun()
+    else:
+        # Default Trajectory Chart when no query active yet
+        st.markdown(
+            """
+            <div style="margin-top: 1rem; padding: 1rem 1.25rem; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.03);">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+                    <div style="font-weight: 700; color: #0f172a; font-size: 0.92rem;">Executive Cash Flow Trajectory by Date</div>
+                    <span class="pill-info" style="font-size: 0.7rem;">24-Month Active Audit</span>
+                </div>
+                <div style="font-size: 0.78rem; color: #64748b; margin-bottom: 0.5rem;">
+                    Monthly inflows vs outflows over time. Ask the Copilot above to generate custom liability, category, or runway charts.
+                </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        default_fig, default_title, default_sub, _ = generate_advisory_chart(
+            "Monthly Cash Flow by Date",
+            df_txn,
+            df_asset,
+            df_liab,
+            kpis,
+            view_type="Monthly Cash Flow by Date",
+            with_range_slider=True,
+        )
+        st.plotly_chart(default_fig, use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
