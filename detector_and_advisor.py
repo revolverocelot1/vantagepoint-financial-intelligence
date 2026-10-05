@@ -1,5 +1,5 @@
 """
-Asset Vantage - Analytics Challenge
+VantagePoint - Financial Intelligence & Advisory Platform
 detector_and_advisor.py: Comprehensive Trends & Anomaly Detector + Financial Advisory Engine
 
 Accomplishes:
@@ -14,7 +14,7 @@ Accomplishes:
     - Action 1 (Debt): Highest interest-rate liability retirement & refinancing strategy.
     - Action 2 (Leakage): Category-level leakage arrest with an exact prescribed monthly budget cap.
     - Action 3 (Runway): 6-month safety liquidity runway audit & exact INR contribution requirement.
-    - AI Bonus: Live Executive Family Office Memo generation powered by google-genai (gemini-2.5-flash).
+    - AI Bonus: Live Executive Strategic Memo generation powered by google-genai (gemini-2.5-flash).
 """
 
 from __future__ import annotations
@@ -543,7 +543,7 @@ def generate_actionable_recommendations(
             f"Over the recent 3 months, '{top_cat_name}' surged by {top_cat_pct:+.1f}% "
             f"(climbing from INR {top_cat_base_avg:,.2f} to INR {top_cat_recent_avg:,.2f}/month). "
             f"Enforcing this cap directly recovers INR {monthly_savings:,.2f} monthly (INR {annualized_savings:,.2f}/year) "
-            f"without impairing core family office operations."
+            f"without impairing core financial operations."
         ),
     }
 
@@ -614,7 +614,7 @@ def generate_actionable_recommendations(
 
 
 # ==============================================================================
-# 4. AI BONUS: EXECUTIVE FAMILY OFFICE MEMO GENERATION (gemini-2.5-flash)
+# 4. AI BONUS: EXECUTIVE STRATEGIC MEMO GENERATION (gemini-2.5-flash)
 # ==============================================================================
 
 def generate_executive_memo(
@@ -625,7 +625,7 @@ def generate_executive_memo(
 ) -> str:
     """
     Generates a concise, high-impact 2-paragraph executive memo written for a
-    Family Office Principal / Investment Committee using google-genai (gemini-2.5-flash).
+    Executive Investment Committee / Client using google-genai (gemini-2.5-flash).
     Includes a deterministic fallback if the API key is not present or offline.
     """
     bench = trends["monthly_expense_benchmarks"]
@@ -637,7 +637,7 @@ def generate_executive_memo(
     act3 = recommendations["action_3_liquidity_runway"]
 
     prompt = f"""
-You are the Chief Investment Officer and Strategic Advisor for an elite Multi-Family Office managing ultra-high-net-worth client affairs.
+You are an elite Senior Financial Advisor and Quantitative Portfolio Strategist.
 Review the following forensic audit results and strategic recommendations computed from the client's books:
 
 DATA SUMMARY:
@@ -654,7 +654,7 @@ DATA SUMMARY:
    - Action 3 (Runway): Current liquid assets (Cash + FD) of INR {act3['total_conservative_liquid_assets_inr']:,.2f} cover {act3['current_runway_months']:.1f} months. Recommend contributing exactly INR {act3['exact_contribution_needed_inr']:,.2f} to hit the 6-month safety runway of INR {act3['target_6_month_runway_inr']:,.2f}.
 
 INSTRUCTIONS:
-Write a concise, polished, authoritative 2-paragraph Executive Memorandum addressed to the Family Office Principal.
+Write a concise, polished, authoritative 2-paragraph Strategic Memorandum addressed to the client.
 - Paragraph 1: Audit of Cash Outflows & Spending Drift ("What changed recently?"). Mention specific figures, drift percentages, and key flagged anomalies.
 - Paragraph 2: Strategic Action Plan ("What should we do next?"). Detail the 3 specific deterministic financial moves: debt liquidation, category budget cap, and the exact liquid runway capital contribution.
 Keep tone executive, institutional, and direct. Do NOT use bullet points; provide exactly two cohesive, publication-grade paragraphs.
@@ -765,7 +765,7 @@ def print_clean_report(results: Dict[str, Any]) -> None:
     subsep = "-" * 80
 
     print("\n" + sep)
-    print("ASSET VANTAGE: STRATEGIC DETECTOR & ADVISOR ENGINE")
+    print("VANTAGEPOINT: STRATEGIC DETECTOR & ADVISOR ENGINE")
     print(sep)
 
     print("\n[GOAL 1: WHAT CHANGED RECENTLY? - TRENDS & SPENDING DRIFT]")
@@ -823,7 +823,7 @@ def print_clean_report(results: Dict[str, Any]) -> None:
     print(f"   Recommendation   : {act3['prescribed_strategy']}")
 
     print("\n" + sep)
-    print("[AI BONUS: EXECUTIVE MEMO FOR FAMILY OFFICE CLIENT (gemini-2.5-flash)]")
+    print("[AI BONUS: EXECUTIVE STRATEGIC MEMORANDUM (gemini-2.5-flash)]")
     print(subsep)
     print(memo)
     print(sep + "\n")
@@ -835,7 +835,7 @@ def print_clean_report(results: Dict[str, Any]) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Asset Vantage: Anomaly Detector & Strategic Financial Advisor"
+        description="VantagePoint: Anomaly Detector & Strategic Financial Advisor"
     )
     parser.add_argument(
         "--transactions",

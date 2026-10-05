@@ -1,4 +1,4 @@
-# VantagePoint | Asset Vantage Financial Intelligence Platform
+# VantagePoint — Financial Intelligence Platform
 
 VantagePoint is an enterprise-grade financial analytics, forensic anomaly detection, and portfolio solvency platform. 
 
@@ -13,7 +13,7 @@ VantagePoint is an enterprise-grade financial analytics, forensic anomaly detect
 2. **First-Page Portfolio Architecture**:
    - **Net Worth Donut**: Net Equity (₹36,87,000) vs. Total Debt (₹33,38,000).
    - **Asset Allocation Donut**: Granular distribution across 8 asset classes (Property, Cash, Mutual Funds, Equity, Vehicle, Gold).
-   - **Interactive Recent 25 Transactions Ledger**: Real-time search, multi-vector filtering, and **User Anomaly Override** allowing principals to check or uncheck anomaly flags on any transaction in real-time.
+   - **Interactive Recent 25 Transactions Ledger**: Real-time search, multi-vector filtering, and **User Anomaly Override** allowing users to check or uncheck anomaly flags on any transaction in real-time.
 
 3. **Dynamic User CSV Ingestion Desk**:
    - Upload custom `Transactions.csv`, `Assets.csv`, and `Liabilities.csv` files via the sidebar.
@@ -27,7 +27,7 @@ VantagePoint is an enterprise-grade financial analytics, forensic anomaly detect
 
 5. **Strategic Advisory & AI Copilot**:
    - Three deterministic strategic actions (Debt Avalanche prepayment of 32% APR debt, leakage budget cap, and 6-month safety runway deficit contribution).
-   - Executive Memorandum and stateless single-turn Q&A console with quick presets.
+   - Strategic Memorandum, dynamic custom timeline visualizations (e.g. custom N-day earnings and expenses graphs), and stateless Q&A console with quick presets.
    - Floating AI Copilot dock.
 
 ---

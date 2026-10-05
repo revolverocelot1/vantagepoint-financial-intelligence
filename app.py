@@ -26,14 +26,14 @@ except Exception:
 
 # Configure page settings
 st.set_page_config(
-    page_title="VantagePoint | Asset Vantage",
+    page_title="VantagePoint | Financial Intelligence",
     page_icon="🔷",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
 # ==============================================================================
-# 1. BESPOKE ASSET VANTAGE BRAND SYSTEM & LUXURY FINTECH STYLING
+# 1. BESPOKE VANTAGEPOINT DESIGN SYSTEM & LUXURY FINTECH STYLING
 # ==============================================================================
 
 CUSTOM_CSS = """
@@ -527,6 +527,8 @@ def calculate_metrics(df_t: pd.DataFrame, df_a: pd.DataFrame, df_l: pd.DataFrame
         "target_6m_runway": target_6m_runway,
         "runway_deficit": runway_deficit,
         "highest_debt": highest_debt,
+        "total_income": total_income,
+        "total_expense": total_expense,
         "n_months": n_months,
     }
 
@@ -586,6 +588,49 @@ def query_gemini_api(prompt: str) -> Optional[str]:
     return None
 
 
+def parse_date_window_query(
+    query: str,
+    df_txn: pd.DataFrame,
+) -> Tuple[Optional[int], bool, bool, bool, Optional[str], pd.Timestamp, pd.Timestamp]:
+    """
+    Parses user inquiries for specific date intervals (e.g. 'last 45 days', 'past 30 days')
+    and financial flow types (income/earnings vs expenses vs specific category).
+    """
+    import re
+    from datetime import timedelta
+
+    q = (query or "").lower()
+    df_t = df_txn.copy()
+    df_t["parsed_date"] = pd.to_datetime(df_t["date"], errors="coerce")
+    max_date = df_t["parsed_date"].max()
+    min_date = df_t["parsed_date"].min()
+
+    # 1. Match days or months
+    days_match = re.search(r'(\d+)\s*(?:day|days)', q)
+    months_match = re.search(r'(\d+)\s*(?:month|months)', q)
+
+    days = None
+    if days_match:
+        days = int(days_match.group(1))
+    elif months_match:
+        days = int(months_match.group(1)) * 30
+    elif "last month" in q or "past month" in q:
+        days = 30
+    elif "last quarter" in q or "past quarter" in q:
+        days = 90
+
+    # 2. Match flow types
+    is_income = any(w in q for w in ["earn", "income", "salary", "inflow", "inflows", "credit", "credits", "revenue"])
+    is_expense = any(w in q for w in ["spend", "expense", "expenses", "outflow", "outflows", "burn", "cost", "bills"])
+    is_both = (is_income and is_expense) or any(w in q for w in ["cash flow", "net", "both", "transaction", "all", "history"])
+
+    # 3. Match categories
+    cats = [c for c in df_t["category"].dropna().unique() if c.lower() in q and c.lower() != "income"]
+    cat_filter = cats[0] if cats else None
+
+    return days, is_income, is_expense, is_both, cat_filter, max_date, min_date
+
+
 def query_local_advisor(
     query: str,
     kpis: Dict[str, Any],
@@ -593,74 +638,145 @@ def query_local_advisor(
     df_asset: pd.DataFrame,
     df_liab: pd.DataFrame,
 ) -> str:
+    import re
+    from datetime import timedelta
     q_lower = query.lower()
+    days, is_income, is_expense, is_both, cat_filter, max_date, min_date = parse_date_window_query(query, df_txn)
 
-    # 1. Debt & Liabilities
-    if any(w in q_lower for w in ["debt", "liabilit", "loan", "credit card", "apr", "interest", "emi", "dti"]):
-        high_l = kpis.get("highest_debt")
-        high_str = ""
-        if isinstance(high_l, pd.Series) and not high_l.empty:
-            high_str = (
-                f"Specifically, Liability **{high_l.get('liability_id', 'L003')} ({high_l.get('type', 'Credit Card')})** "
-                f"carries an aggressive **{high_l.get('interest_rate', 32.0):.1f}% APR** on an outstanding balance of "
-                f"₹{high_l.get('outstanding', 68000):,.0f} (monthly EMI ₹{high_l.get('emi', 7000):,.0f}), costing "
-                f"₹{high_l.get('outstanding', 68000) * high_l.get('interest_rate', 32.0) / 100.0:,.0f} in annual interest drag."
+    # 1. Custom Date Window Analysis (e.g. "earning in last 45 days")
+    if days:
+        cutoff_date = max_date - timedelta(days=days)
+        df_t = df_txn.copy()
+        df_t["parsed_date"] = pd.to_datetime(df_t["date"], errors="coerce")
+        slice_df = df_t[df_t["parsed_date"] >= cutoff_date]
+
+        if is_income and not is_both:
+            inc_sub = slice_df[slice_df["type"] == "income"].sort_values(by="parsed_date")
+            tot_inc = inc_sub["amount"].sum()
+            if inc_sub.empty:
+                all_inc = df_t[df_t["type"] == "income"].sort_values(by="parsed_date")
+                last_inc = all_inc.iloc[-1] if not all_inc.empty else None
+                last_txt = f"₹{last_inc['amount']:,.0f} ({last_inc['category']}) on {last_inc['date']}" if last_inc is not None else "N/A"
+                return (
+                    f"Your custom earnings graph for the last {days} days is rendered below.\n\n"
+                    f"• **Total Earnings (Last {days} Days):** **₹0.00** (No credit inflows recorded between {cutoff_date.strftime('%d-%b-%Y')} and {max_date.strftime('%d-%b-%Y')}).\n"
+                    f"• **Previous Recorded Inflow:** **{last_txt}**.\n"
+                    f"• **Schedule Context:** Monthly corporate payroll credits around the 2nd of each month (e.g. ₹3,29,500 on 02-Sep)."
+                )
+            entries_str = "\n".join([f"  • **{r.date}**: {r.category} — ₹{r.amount:,.0f} ({r.description})" for _, r in inc_sub.iterrows()])
+            return (
+                f"Your custom interactive earnings graph for the last {days} days is rendered below.\n\n"
+                f"• **Total Earnings (Last {days} Days):** **₹{tot_inc:,.0f}** across {len(inc_sub)} credit entry(ies).\n"
+                f"• **Inflow Breakdown:**\n{entries_str}\n"
+                f"• **Period Analyzed:** {cutoff_date.strftime('%d-%b-%Y')} to {max_date.strftime('%d-%b-%Y')}."
             )
+
+        elif is_expense and not is_both:
+            exp_sub = slice_df[slice_df["type"] == "expense"].sort_values(by="parsed_date")
+            if cat_filter:
+                exp_sub = exp_sub[exp_sub["category"] == cat_filter]
+            tot_exp = exp_sub["amount"].sum()
+            top_cats = exp_sub.groupby("category")["amount"].sum().sort_values(ascending=False).head(3)
+            top_str = ", ".join([f"{c}: ₹{v:,.0f}" for c, v in top_cats.items()]) if not top_cats.empty else "None"
+            cat_label = f" under '{cat_filter}'" if cat_filter else ""
+            return (
+                f"Your custom spending breakdown graph for the last {days} days is rendered below.\n\n"
+                f"• **Total Outflows{cat_label}:** **₹{tot_exp:,.0f}** across {len(exp_sub)} transactions.\n"
+                f"• **Top Categories:** {top_str}.\n"
+                f"• **Period Analyzed:** {cutoff_date.strftime('%d-%b-%Y')} to {max_date.strftime('%d-%b-%Y')}."
+            )
+
+        else:
+            inc_tot = slice_df[slice_df["type"] == "income"]["amount"].sum()
+            exp_tot = slice_df[slice_df["type"] == "expense"]["amount"].sum()
+            net_tot = inc_tot - exp_tot
+            return (
+                f"Your custom cash flow trajectory graph for the last {days} days is rendered below.\n\n"
+                f"• **Total Inflows:** **₹{inc_tot:,.0f}**\n"
+                f"• **Total Outflows:** **₹{exp_tot:,.0f}**\n"
+                f"• **Net Retained:** **{'+' if net_tot >= 0 else ''}₹{net_tot:,.0f}**\n"
+                f"• **Period Analyzed:** {cutoff_date.strftime('%d-%b-%Y')} to {max_date.strftime('%d-%b-%Y')}."
+            )
+
+    # 2. Core Question 1: How much do we earn?
+    if any(w in q_lower for w in ["how much do we earn", "how much earn", "what do we earn", "how much we earn", "income source", "total earnings"]):
         return (
-            f"**Debt Audit & Strategic Leverage:**\n\n"
-            f"The client's portfolio Debt-to-Income (DTI) ratio is **{kpis['dti']:.1f}%**, which is well inside the conservative 35.0% institutional benchmark. "
-            f"Total outstanding obligations stand at **₹{kpis['total_debt']:,.0f}**, requiring **₹{kpis['total_emi']:,.0f}** in monthly debt service.\n\n"
-            f"{high_str}\n\n"
-            f"**Strategic Recommendation:** Prepay Credit Card L003 in full prior to its upcoming due date. "
-            f"This terminates ₹21,760 in annual interest drag, liberates ₹7,000/month into investable surplus, and reduces DTI to 16.6%."
+            f"Your historical inflows and cash flow trajectory graph is rendered below.\n\n"
+            f"• **Monthly Inflows:** **₹{kpis['avg_monthly_income']:,.0f} / month** average (₹{kpis['total_income']:,.0f} across 24 months).\n"
+            f"• **Primary Income Streams:** Corporate Tech Salary (₹3,29,500/mo credited on 2nd) + Secondary Consulting/Dividends (₹25,500 periodic).\n"
+            f"• **Cadence & Stability:** 100% on-time monthly salary cadence across 25 total credit entries with zero missed pay cycles."
         )
 
-    # 2. Spending Drift & Outflows
-    if any(w in q_lower for w in ["change", "recent", "drift", "trend", "surge", "spike", "grow", "burn", "outflow", "spend"]):
+    # 3. Core Question 2: Where does the money go?
+    if any(w in q_lower for w in ["where does the money go", "where the money goes", "where money go", "where do we spend", "spending breakdown", "where are we spending"]):
+        top_cats = df_txn[df_txn["type"] == "expense"].groupby("category")["amount"].sum().sort_values(ascending=False).head(4)
+        cat_lines = ", ".join([f"{c}: ₹{v/kpis['n_months']:,.0f}/mo" for c, v in top_cats.items()])
         return (
-            f"**Forensic Spending Drift & Burn Analysis:**\n\n"
-            f"Over the recent 3-month observation window, household expenses expanded by **+{kpis['drift_expansion_pct']:.1f}%** "
-            f"(+₹{kpis['drift_expansion_inr']:,.0f}/month), accelerating from a historical baseline of ₹{kpis['baseline_burn']:,.0f}/mo to an active run-rate of **₹{kpis['recent_burn']:,.0f}/month**.\n\n"
-            f"**Key Growth Drivers:**\n"
-            f"• **Other Discretionary:** +100.0% drift (from ₹4,373 to ₹8,748/mo)\n"
-            f"• **Shopping & Retail:** +74.2% expansion (from ₹12,094 to ₹21,072/mo)\n"
-            f"• **Food & Dining:** +48.2% surge (from ₹23,338 to ₹34,579/mo)\n\n"
-            f"**Forensic Anomalies:** 12 statistical outliers were detected, highlighted by an extreme **₹1,85,000 mobile bill** under Utilities on 14-Mar-2026 (Txn T0488, Z=17.61)."
+            f"Your category expenditure trajectory and burn rate graph is rendered below.\n\n"
+            f"• **Active Burn Rate:** **₹{kpis['recent_burn']:,.0f} / month** (Historical baseline: ₹{kpis['baseline_burn']:,.0f}/mo).\n"
+            f"• **Top Outflow Allocations:** {cat_lines}.\n"
+            f"• **Discretionary Leakage:** Discretionary 'Other' (+100.0%) and 'Shopping' (+74.2%) account for the recent 10.8% spending expansion."
         )
 
-    # 3. Next Actions & Recommendations
+    # 4. Core Question 3: Are we saving enough?
+    if any(w in q_lower for w in ["are we saving enough", "saving enough", "savings rate", "save enough", "are we saving"]):
+        surplus = kpis['avg_monthly_income'] - kpis['avg_monthly_expense']
+        return (
+            f"Your savings capacity and net retained surplus graph is rendered below.\n\n"
+            f"• **Active Savings Rate:** **{kpis['savings_rate']:.1f}%** — comfortably exceeds the institutional 20.0% benchmark.\n"
+            f"• **Net Monthly Capital Surplus:** Retaining **+₹{surplus:,.0f} / month** in net cash accumulation.\n"
+            f"• **Optimization Target:** Capping 'Other' leakage at ₹4,400/mo will elevate the savings rate to **33.0%**."
+        )
+
+    # 5. Core Question 4: Can we handle our debt?
+    if any(w in q_lower for w in ["debt", "liabilit", "loan", "credit card", "apr", "interest", "emi", "dti", "handle our debt"]):
+        high_l = kpis.get("highest_debt")
+        high_text = f"Liability **{high_l['liability_id']} ({high_l['type']})** carries a **32.0% APR** (₹{high_l['outstanding']:,.0f} balance, ₹{high_l['emi']:,.0f}/mo EMI), incurring ₹{high_l['outstanding'] * high_l['interest_rate'] / 100:,.0f}/yr in interest drag." if isinstance(high_l, pd.Series) and not high_l.empty else ""
+        return (
+            f"Your liability obligations and interest drag analysis graph is rendered below.\n\n"
+            f"• **Debt-to-Income (DTI):** **{kpis['dti']:.1f}%** (Total Monthly EMIs: ₹{kpis['total_emi']:,.0f}) — well below the 35% safe threshold.\n"
+            f"• **Total Outstanding Debt:** **₹{kpis['total_debt']:,.0f}** across {len(df_liab)} obligations.\n"
+            f"• **Critical Drag:** {high_text}\n"
+            f"• **Recommended Move:** Prepay Credit Card L003 in full immediately to capture ₹21,760/yr in interest savings and release ₹7,000/mo cash flow."
+        )
+
+    # 6. Core Question 5: What changed recently?
+    if any(w in q_lower for w in ["change", "recent", "drift", "trend", "surge", "spike", "grow", "burn", "outflow", "what changed"]):
+        return (
+            f"Your spending drift and category burn rate graph is rendered below.\n\n"
+            f"• **Monthly Outflow Expansion:** **+{kpis['drift_expansion_pct']:.1f}%** (+₹{kpis['drift_expansion_inr']:,.0f}/mo), rising from ₹{kpis['baseline_burn']:,.0f}/mo baseline to **₹{kpis['recent_burn']:,.0f}/mo**.\n"
+            f"• **Fastest Growing Categories:** 'Other' (+100.0%, to ₹8,748/mo), 'Shopping' (+74.2%, to ₹21,072/mo), 'Food' (+48.2%, to ₹34,579/mo).\n"
+            f"• **Flagged Outlier:** Txn T0488: **₹1,85,000 mobile bill** on 14-Mar-2026 under Utilities (Z=17.61)."
+        )
+
+    # 7. Core Question 6: What should we do next?
     if any(w in q_lower for w in ["next", "action", "do next", "recommend", "roadmap", "priorit", "plan", "step"]):
         return (
-            f"**Strategic Action Roadmap (Executive Priorities):**\n\n"
-            f"1. **Prepay 32% APR Debt:** Liquidate the ₹68,000 balance on Credit Card L003 immediately to permanently eliminate ₹21,760 in annual interest drag and free ₹7,000/month.\n"
-            f"2. **Enforce Monthly Discretionary Cap:** Institute a firm budget cap of ₹4,400/month on the 'Other' category, reclaiming ₹4,348/month (₹52,176/year) in recurring leakage.\n"
-            f"3. **Capitalize 6-Month Liquidity Runway:** Deploy an exact contribution of **₹{kpis['runway_deficit']:,.0f}** into high-yield liquid sweep accounts to expand current reserves from ₹{kpis['liquid_assets']:,.0f} ({kpis['runway_months']:.1f} months) to the institutional target of ₹{kpis['target_6m_runway']:,.0f}."
+            f"Your strategic action impact matrix is displayed below.\n\n"
+            f"• **1. Prepay Credit Card L003 (₹68,000):** Stops ₹21,760/year in 32% APR interest drain and unlocks ₹7,000/mo cash flow.\n"
+            f"• **2. Cap Discretionary 'Other':** Enforce a ₹4,400/month budget cap to recover ₹52,176/year in leakage.\n"
+            f"• **3. Top Up Safety Runway:** Deploy **₹{kpis['runway_deficit']:,.0f}** to achieve the 6-month liquidity buffer (₹{kpis['target_6m_runway']:,.0f})."
         )
 
-    # 4. Runway & Emergency Buffer
+    # 8. Runway
     if any(w in q_lower for w in ["runway", "liquid", "safety", "emergency", "buffer", "fd"]):
         return (
-            f"**Liquidity & Safety Runway Audit:**\n\n"
-            f"The client currently holds **₹{kpis['liquid_assets']:,.0f}** in conservative liquid assets (Savings, Current, and Fixed Deposit accounts). "
-            f"Against the active run-rate burn of ₹{kpis['recent_burn']:,.0f}/month, this provides **{kpis['runway_months']:.1f} months** of emergency survival runway.\n\n"
-            f"**Capital Requirement:** The multi-family office standard mandates a 6.0-month liquidity buffer of **₹{kpis['target_6m_runway']:,.0f}**. "
-            f"This leaves an exact deficit of **₹{kpis['runway_deficit']:,.0f}**. We recommend allocating monthly operational cash surpluses directly into high-yield sweep accounts until this target is met."
+            f"Your liquidity runway vs safety mandate graph is displayed below.\n\n"
+            f"• **Current Liquid Reserves:** **₹{kpis['liquid_assets']:,.0f}** (Savings + Current + FDs), providing **{kpis['runway_months']:.1f} months** of burn coverage.\n"
+            f"• **6-Month Mandated Target:** **₹{kpis['target_6m_runway']:,.0f}** (based on ₹{kpis['recent_burn']:,.0f}/mo recent burn).\n"
+            f"• **Runway Deficit:** **₹{kpis['runway_deficit']:,.0f}** exact contribution required."
         )
 
-    # 5. Net Worth & Health Score
+    # 9. Net Worth / Health Score
     if any(w in q_lower for w in ["net worth", "wealth", "asset", "health score", "score", "worth", "solvency"]):
         return (
-            f"**Balance Sheet Solvency & Wealth Index:**\n\n"
-            f"• **Net Worth:** **₹{kpis['net_worth']:,.0f}** (Assets ₹{kpis['total_assets']:,.0f} minus Liabilities ₹{kpis['total_debt']:,.0f})\n"
-            f"• **Financial Health Score:** **{kpis['health_score']}/100** (Institutional Grade)\n"
-            f"  - Savings Rate Pillar: {kpis['s_savings']:.1f} / 25\n"
-            f"  - Debt Coverage Pillar: {kpis['s_debt']:.1f} / 25\n"
-            f"  - Liquidity Runway Pillar: {kpis['s_runway']:.1f} / 25\n"
-            f"  - Cash Outflow Discipline Pillar: {kpis['s_drift']:.1f} / 25\n\n"
-            f"Overall solvency is high with an Asset-to-Debt multiple of 2.1x."
+            f"Your multi-asset allocation and solvency structure graph is displayed below.\n\n"
+            f"• **Net Worth:** **₹{kpis['net_worth']:,.0f}** (Total Assets: ₹{kpis['total_assets']:,.0f} minus Total Liabilities: ₹{kpis['total_debt']:,.0f}).\n"
+            f"• **Financial Health Score:** **{kpis['health_score']} / 100** (Savings: {kpis['s_savings']:.0f}, Debt: {kpis['s_debt']:.0f}, Runway: {kpis['s_runway']:.0f}, Drift: {kpis['s_drift']:.0f}).\n"
+            f"• **Solvency Multiple:** **2.1x** asset-to-debt ratio."
         )
 
-    # 6. Category Specific
+    # 10. Category Deep Dive
     cats = [c for c in df_txn["category"].dropna().unique() if c.lower() in q_lower and c.lower() != "income"]
     if cats:
         target_cat = cats[0]
@@ -668,20 +784,19 @@ def query_local_advisor(
         tot = sub["amount"].sum()
         mo_avg = tot / max(1, kpis["n_months"])
         return (
-            f"**Expenditure Breakdown for '{target_cat}':**\n\n"
-            f"Across all recorded periods, cumulative spend in **{target_cat}** totals **₹{tot:,.0f}**, averaging **₹{mo_avg:,.0f}/month**.\n\n"
-            f"We recommend setting a structured monthly quota on this category to ensure that seasonal surges do not impede regular liquidity sweep allocations."
+            f"Your category expenditure trajectory graph is displayed below.\n\n"
+            f"• **Category:** '{target_cat}'\n"
+            f"• **Cumulative Spend:** **₹{tot:,.0f}** across {len(sub)} transactions.\n"
+            f"• **Monthly Average:** **₹{mo_avg:,.0f} / month**.\n"
+            f"• **Recommendation:** Set a firm quarterly budget cap on {target_cat} to protect discretionary savings."
         )
 
-    # 7. General Fallback
+    # 11. General Overview
     return (
-        f"**Executive Portfolio Briefing:**\n\n"
-        f"The portfolio displays strong core fundamentals with a Net Worth of **₹{kpis['net_worth']:,.0f}**, "
-        f"a monthly income average of **₹{kpis['avg_monthly_income']:,.0f}**, and a healthy savings rate of **{kpis['savings_rate']:.1f}%**.\n\n"
-        f"Top 3 Immediate Prescriptions:\n"
-        f"1. Prepay Credit Card L003 (₹68,000 at 32.0% APR) to eliminate ₹21,760 in annual interest.\n"
-        f"2. Enforce a ₹4,400 monthly cap on 'Other' spending to reverse discretionary drift (+{kpis['drift_expansion_pct']:.1f}%).\n"
-        f"3. Fund the ₹{kpis['runway_deficit']:,.0f} liquidity gap to establish the full 6-month safety runway."
+        f"Your portfolio cash flow trajectory graph is displayed below.\n\n"
+        f"• **Net Worth:** **₹{kpis['net_worth']:,.0f}** | **Monthly Inflow Avg:** **₹{kpis['avg_monthly_income']:,.0f} / mo**\n"
+        f"• **Savings Rate:** **{kpis['savings_rate']:.1f}%** | **Debt-to-Income (DTI):** **{kpis['dti']:.1f}%**\n"
+        f"• **Key Priorities:** Prepay 32% APR Credit Card L003, cap discretionary spending drift (+10.8%), and fund ₹{kpis['runway_deficit']:,.0f} runway deficit."
     )
 
 
@@ -692,21 +807,57 @@ def ask_advisor(
     df_asset: pd.DataFrame,
     df_liab: pd.DataFrame,
 ) -> Tuple[str, str]:
-    prompt = f"""You are the Senior Family Office Principal Advisor at VantagePoint / Asset Vantage.
-Client Financial Audit Context:
-- Net Worth: INR {kpis['net_worth']:,.0f} (Total Assets: INR {kpis['total_assets']:,.0f}, Total Debt: INR {kpis['total_debt']:,.0f})
-- Financial Health Score: {kpis['health_score']}/100 (Savings: {kpis['s_savings']:.1f}/25, Debt: {kpis['s_debt']:.1f}/25, Runway: {kpis['s_runway']:.1f}/25, Drift: {kpis['s_drift']:.1f}/25)
+    from datetime import timedelta
+    days, is_income, is_expense, is_both, cat_filter, max_date, min_date = parse_date_window_query(query, df_txn)
+
+    window_context = ""
+    if days:
+        cutoff_date = max_date - timedelta(days=days)
+        df_t = df_txn.copy()
+        df_t["parsed_date"] = pd.to_datetime(df_t["date"], errors="coerce")
+        slice_df = df_t[df_t["parsed_date"] >= cutoff_date]
+        inc_sub = slice_df[slice_df["type"] == "income"]
+        exp_sub = slice_df[slice_df["type"] == "expense"]
+        inc_sum = inc_sub["amount"].sum()
+        exp_sum = exp_sub["amount"].sum()
+
+        all_inc = df_t[df_t["type"] == "income"].sort_values(by="parsed_date")
+        last_inc = all_inc.iloc[-1] if not all_inc.empty else None
+        last_inc_str = f"INR {last_inc['amount']:,.0f} ({last_inc['category']}) on {last_inc['date']}" if last_inc is not None else "N/A"
+
+        entries_list = [f"{r.date}: {r.category} INR {r.amount:,.0f} ({r.description})" for _, r in inc_sub.iterrows()]
+        entries_txt = "; ".join(entries_list) if entries_list else f"No credit inflows in this specific {days}-day window. (Most recent credit was {last_inc_str})."
+
+        window_context = f"""
+SPECIFIC COMPUTED DATA FOR REQUESTED TIME WINDOW (LAST {days} DAYS):
+- Window Period: {cutoff_date.strftime('%d-%b-%Y')} to {max_date.strftime('%d-%b-%Y')}
+- Total Earnings / Inflows in this window: INR {inc_sum:,.0f} across {len(inc_sub)} credit entry(ies)
+  Details: {entries_txt}
+- Total Outflows / Expenses: INR {exp_sum:,.0f} across {len(exp_sub)} debit transaction(s)
+- Net Retained Cash Flow in Window: INR {inc_sum - exp_sum:,.0f}
+- Most Recent Salary/Income Credit outside window: {last_inc_str}
+"""
+
+    prompt = f"""You are VantagePoint AI, an elite financial intelligence copilot.
+Client Verified Financial Fundamentals:
+- Net Worth: INR {kpis['net_worth']:,.0f} (Assets: INR {kpis['total_assets']:,.0f}, Liabilities: INR {kpis['total_debt']:,.0f})
+- Financial Health Score: {kpis['health_score']}/100 | Solvency: 2.1x Asset-to-Debt
 - Monthly Income: INR {kpis['avg_monthly_income']:,.0f}/mo avg | Savings Rate: {kpis['savings_rate']:.1f}%
-- Recent Burn Rate: INR {kpis['recent_burn']:,.0f}/mo vs 21M Baseline INR {kpis['baseline_burn']:,.0f}/mo (+{kpis['drift_expansion_pct']:.1f}% expansion, +INR {kpis['drift_expansion_inr']:,.0f}/mo)
+- Recent Burn Rate: INR {kpis['recent_burn']:,.0f}/mo vs Baseline INR {kpis['baseline_burn']:,.0f}/mo (+{kpis['drift_expansion_pct']:.1f}% drift)
 - DTI Ratio: {kpis['dti']:.1f}% (Monthly EMIs: INR {kpis['total_emi']:,.0f})
-- Emergency Liquid Runway: {kpis['runway_months']:.1f} months (Liquid Assets: INR {kpis['liquid_assets']:,.0f} vs 6-Month Mandate INR {kpis['target_6m_runway']:,.0f}, Deficit: INR {kpis['runway_deficit']:,.0f})
-- High-Cost Liability: Credit Card L003 has INR 68,000 outstanding at 32.0% APR (Due today, EMI INR 7,000/mo, Annual Drag INR 21,760)
-- Fastest Expanding Categories: 'Other' (+100.0% drift), 'Shopping' (+74.2% drift), 'Food' (+48.2% drift)
-- Primary Outlier: Txn T0488 (INR 1,85,000 Mobile bill under Utilities, Z=17.61)
+- Emergency Liquid Runway: {kpis['runway_months']:.1f} months (Liquid Reserves: INR {kpis['liquid_assets']:,.0f} vs 6M Mandate INR {kpis['target_6m_runway']:,.0f}, Deficit: INR {kpis['runway_deficit']:,.0f})
+- Critical Debt: Credit Card L003 has INR 68,000 at 32.0% APR (Due today, EMI INR 7,000/mo, Annual Drag INR 21,760)
+- Fastest Expanding Categories: 'Other' (+100.0%), 'Shopping' (+74.2%), 'Food' (+48.2%)
+- Outlier Flag: Txn T0488 (INR 1,85,000 Mobile bill under Utilities, Z=17.61)
+{window_context}
+User Query: "{query}"
 
-User Financial Question: "{query}"
-
-Provide an authoritative, executive, direct 2-to-3 paragraph response for the Family Office Principal. Include specific numbers, calculations, and exact next steps. Keep the tone sophisticated and direct.
+CRITICAL INSTRUCTIONS:
+1. The requested visual graph HAS ALREADY BEEN GENERATED AND IS DISPLAYED DIRECTLY BELOW YOUR ANSWER. NEVER state that you 'cannot generate a graph', 'cannot produce visual charts', or that you are a 'text-based AI'. Always acknowledge that the interactive chart is rendered below.
+2. NO YAPPING. Keep your response strictly structured, concise, and to the point using clean bullet points (maximum 3-4 bullets total).
+3. Do NOT pretend to be part of Asset Vantage or use family office roleplay jargon. Be factual, direct, and professional.
+4. Directly state the exact requested numbers, metrics, and dates.
+5. If the requested time window has INR 0 earnings (e.g. last 15 days), state directly that INR 0 was recorded in this window and mention the previous credit date and amount.
 """
     gemini_ans = query_gemini_api(prompt)
     if gemini_ans:
@@ -730,18 +881,170 @@ def generate_advisory_chart(
     or explicit metric selection.
     Returns: (fig, title, subtitle, detected_mode)
     """
-    q_lower = (query or "").lower()
+    from datetime import timedelta
 
-    # 1. Determine active perspective
+    q_lower = (query or "").lower()
+    df_t = df_txn.copy()
+    df_t["parsed_date"] = pd.to_datetime(df_t["date"], errors="coerce")
+    max_date = df_t["parsed_date"].max()
+    min_date = df_t["parsed_date"].min()
+
+    days, is_income, is_expense, is_both, cat_filter, _, _ = parse_date_window_query(query, df_txn)
+
+    # Check if custom window mode is explicitly requested or auto-detected
+    is_custom_requested = (view_type and view_type.startswith("Custom Timeline")) or (
+        days and (not view_type or view_type == "Auto (Query-Matched)")
+    )
+
+    if is_custom_requested and days:
+        cutoff_date = max_date - timedelta(days=days)
+        slice_df = df_t[df_t["parsed_date"] >= cutoff_date]
+
+        if slice_df.empty:
+            fig = go.Figure()
+            fig.add_annotation(
+                text=f"<b>No transactions logged in this {days}-day window</b><br>({cutoff_date.strftime('%d-%b-%Y')} to {max_date.strftime('%d-%b-%Y')}).",
+                xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+                font=dict(size=13, color="#1e293b"),
+                bgcolor="rgba(241, 245, 249, 0.95)",
+                bordercolor="#cbd5e1",
+                borderwidth=1,
+                borderpad=10,
+            )
+            fig.update_layout(height=380, margin=dict(l=20, r=20, t=30, b=20), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+            title = f"Activity Timeline (Last {days} Days: {cutoff_date.strftime('%d-%b-%Y')} to {max_date.strftime('%d-%b-%Y')})"
+            subtitle = f"No activity recorded in this {days}-day interval."
+            return fig, title, subtitle, f"Custom Timeline (Last {days} Days)"
+
+        if is_income and not is_both:
+            inc_df = slice_df[slice_df["type"] == "income"].sort_values(by="parsed_date")
+            fig = go.Figure()
+            if inc_df.empty:
+                all_inc = df_t[df_t["type"] == "income"].sort_values(by="parsed_date")
+                last_inc = all_inc.iloc[-1] if not all_inc.empty else None
+                last_txt = f"₹{last_inc['amount']:,.0f} ({last_inc['category']}) on {last_inc['date']}" if last_inc is not None else "N/A"
+                sample_dates = slice_df["date"].drop_duplicates().sort_values().tolist()
+                fig.add_trace(go.Bar(
+                    x=sample_dates,
+                    y=[0.0] * len(sample_dates),
+                    name="Earnings (₹)",
+                    marker_color="#10b981",
+                    hovertemplate="<b>%{x}</b><br>Amount: ₹0<extra></extra>"
+                ))
+                fig.add_annotation(
+                    text=f"<b>No earnings recorded in this {days}-day window</b><br>({cutoff_date.strftime('%d-%b-%Y')} to {max_date.strftime('%d-%b-%Y')})<br>Previous salary credit: <b>{last_txt}</b>",
+                    xref="paper", yref="paper", x=0.5, y=0.55, showarrow=False,
+                    font=dict(size=13, color="#1e293b"),
+                    bgcolor="rgba(241, 245, 249, 0.95)",
+                    bordercolor="#cbd5e1",
+                    borderwidth=1,
+                    borderpad=12,
+                )
+                fig.update_layout(
+                    height=380,
+                    margin=dict(l=20, r=20, t=30, b=20),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(showgrid=False, tickangle=-20),
+                    yaxis=dict(gridcolor="#f1f5f9", tickprefix="₹", range=[0, 10000]),
+                    showlegend=False,
+                )
+                title = f"Earnings & Inflows Breakdown (Last {days} Days: {cutoff_date.strftime('%d-%b-%Y')} to {max_date.strftime('%d-%b-%Y')})"
+                subtitle = f"Total Inflows: ₹0 in this window. Previous salary credit: {last_txt}."
+                return fig, title, subtitle, f"Custom Timeline (Last {days} Days)"
+            else:
+                fig.add_trace(go.Bar(
+                    x=inc_df["date"],
+                    y=inc_df["amount"],
+                    name="Earnings (₹)",
+                    marker_color="#10b981",
+                    text=[f"₹{v:,.0f}" for v in inc_df["amount"]],
+                    textposition="outside",
+                    hovertext=inc_df["category"] + " - " + inc_df["description"],
+                    hovertemplate="<b>%{x}</b><br>Amount: ₹%{y:,.0f}<br>%{hovertext}<extra></extra>"
+                ))
+                fig.update_layout(
+                    height=380,
+                    margin=dict(l=20, r=20, t=30, b=20),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(showgrid=False, tickangle=-20),
+                    yaxis=dict(gridcolor="#f1f5f9", tickprefix="₹"),
+                    showlegend=False,
+                )
+                title = f"Earnings & Inflows Breakdown (Last {days} Days: {cutoff_date.strftime('%d-%b-%Y')} to {max_date.strftime('%d-%b-%Y')})"
+                subtitle = f"Total Inflows: ₹{inc_df['amount'].sum():,.0f} across {len(inc_df)} credit transaction(s)."
+                return fig, title, subtitle, f"Custom Timeline (Last {days} Days)"
+
+        elif is_expense and not is_both:
+            exp_df = slice_df[slice_df["type"] == "expense"].sort_values(by="parsed_date")
+            if cat_filter:
+                exp_df = exp_df[exp_df["category"] == cat_filter]
+            daily_exp = exp_df.groupby("date")["amount"].sum().reset_index()
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=daily_exp["date"],
+                y=daily_exp["amount"],
+                name="Expenses (₹)",
+                marker_color="#ef4444",
+                hovertemplate="<b>%{x}</b><br>Spend: ₹%{y:,.0f}<extra></extra>"
+            ))
+            fig.update_layout(
+                height=380,
+                margin=dict(l=20, r=20, t=30, b=20),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(showgrid=False, tickangle=-45),
+                yaxis=dict(gridcolor="#f1f5f9", tickprefix="₹"),
+                showlegend=False,
+            )
+            cat_str = f" for '{cat_filter}'" if cat_filter else ""
+            title = f"Expenditure Trajectory{cat_str} (Last {days} Days: {cutoff_date.strftime('%d-%b-%Y')} to {max_date.strftime('%d-%b-%Y')})"
+            subtitle = f"Total Outflows: ₹{exp_df['amount'].sum():,.0f} across {len(exp_df)} transactions."
+            return fig, title, subtitle, f"Custom Timeline (Last {days} Days)"
+
+        else:
+            # Both inflows & outflows in window (or general timeline)
+            d_m = slice_df.groupby(["date", "type"])["amount"].sum().unstack(fill_value=0.0).reset_index()
+            if "income" not in d_m.columns:
+                d_m["income"] = 0.0
+            if "expense" not in d_m.columns:
+                d_m["expense"] = 0.0
+            fig = go.Figure()
+            fig.add_trace(go.Bar(x=d_m["date"], y=d_m["income"], name="Inflows", marker_color="#10b981"))
+            fig.add_trace(go.Bar(x=d_m["date"], y=d_m["expense"], name="Outflows", marker_color="#ef4444"))
+            fig.update_layout(
+                barmode="group",
+                height=380,
+                margin=dict(l=20, r=20, t=30, b=20),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                xaxis=dict(showgrid=False, tickangle=-45),
+                yaxis=dict(gridcolor="#f1f5f9", tickprefix="₹"),
+                legend=dict(orientation="h", y=1.14, x=1, xanchor="right"),
+            )
+            tot_in = float(slice_df[slice_df['type']=='income']['amount'].sum())
+            tot_out = float(slice_df[slice_df['type']=='expense']['amount'].sum())
+            title = f"Inflows vs Outflows Timeline (Last {days} Days: {cutoff_date.strftime('%d-%b-%Y')} to {max_date.strftime('%d-%b-%Y')})"
+            subtitle = f"Total Inflows: ₹{tot_in:,.0f} | Total Outflows: ₹{tot_out:,.0f}"
+            return fig, title, subtitle, f"Custom Timeline (Last {days} Days)"
+
+    # Standard View Modes
     if not view_type or view_type == "Auto (Query-Matched)":
-        if any(w in q_lower for w in ["debt", "liabilit", "loan", "credit card", "apr", "interest", "emi", "drag", "dti"]):
-            chosen_mode = "Liabilities & Interest Drag"
-        elif any(w in q_lower for w in ["category", "categories", "food", "shopping", "dining", "leak", "leakage", "drift", "surge", "other", "grocer", "travel"]):
+        if any(w in q_lower for w in ["how much do we earn", "how much earn", "what do we earn", "how much we earn", "earnings", "income", "inflow", "inflows", "salary"]):
+            chosen_mode = "Monthly Cash Flow by Date"
+        elif any(w in q_lower for w in ["where does the money go", "where money go", "where do we spend", "category", "categories", "food", "shopping", "dining", "leak", "leakage", "drift", "surge", "other", "grocer", "travel"]):
             chosen_mode = "Spending Drift & Category Breakdown"
+        elif any(w in q_lower for w in ["are we saving enough", "saving enough", "savings rate", "save enough", "savings", "surplus"]):
+            chosen_mode = "Monthly Cash Flow by Date"
+        elif any(w in q_lower for w in ["can we handle our debt", "handle debt", "debt", "liabilit", "loan", "credit card", "apr", "interest", "emi", "drag", "dti"]):
+            chosen_mode = "Liabilities & Interest Drag"
+        elif any(w in q_lower for w in ["what changed recently", "what changed", "change", "recent", "drift", "trend", "spike", "outlier"]):
+            chosen_mode = "Spending Drift & Category Breakdown"
+        elif any(w in q_lower for w in ["what should we do next", "do next", "next action", "roadmap", "plan", "priorit", "recommend", "intervention"]):
+            chosen_mode = "Strategic Action Impact Matrix"
         elif any(w in q_lower for w in ["runway", "liquid", "safety", "emergency", "buffer", "deficit", "reserve", "cash buffer", "fd"]):
             chosen_mode = "Liquidity Runway vs 6-Month Mandate"
-        elif any(w in q_lower for w in ["next", "action", "do next", "recommend", "roadmap", "plan", "priorit", "intervention"]):
-            chosen_mode = "Strategic Action Impact Matrix"
         elif any(w in q_lower for w in ["net worth", "asset", "wealth", "equity", "solvency", "worth", "health score", "score", "balance sheet"]):
             chosen_mode = "Net Worth & Multi-Asset Allocation"
         else:
@@ -749,18 +1052,19 @@ def generate_advisory_chart(
     else:
         chosen_mode = view_type
 
-    # 2. Build the selected figure
     if chosen_mode == "Monthly Cash Flow by Date":
-        df_t = df_txn.copy()
-        df_t["parsed_date"] = pd.to_datetime(df_t["date"], errors="coerce")
         df_t["month_str"] = df_t["parsed_date"].dt.strftime("%Y-%m")
         m_df = df_t.groupby(["month_str", "type"])["amount"].sum().unstack(fill_value=0.0).reset_index()
-        m_df["net_cash_flow"] = m_df.get("income", 0.0) - m_df.get("expense", 0.0)
+        if "income" not in m_df.columns:
+            m_df["income"] = 0.0
+        if "expense" not in m_df.columns:
+            m_df["expense"] = 0.0
+        m_df["net_cash_flow"] = m_df["income"] - m_df["expense"]
 
         fig = go.Figure()
         fig.add_trace(go.Bar(
             x=m_df["month_str"],
-            y=m_df.get("income", 0.0),
+            y=m_df["income"],
             name="Inflows (Income)",
             marker_color="#10b981",
             opacity=0.9,
@@ -768,7 +1072,7 @@ def generate_advisory_chart(
         ))
         fig.add_trace(go.Bar(
             x=m_df["month_str"],
-            y=m_df.get("expense", 0.0),
+            y=m_df["expense"],
             name="Outflows (Expense)",
             marker_color="#ef4444",
             opacity=0.9,
@@ -784,7 +1088,6 @@ def generate_advisory_chart(
             hovertemplate="<b>%{x}</b><br>Net Retained: ₹%{y:,.0f}<extra></extra>"
         ))
 
-        # Highlight recent 3 months drift window
         recent_3m = m_df["month_str"].tail(3).tolist()
         if len(recent_3m) >= 3:
             fig.add_vrect(
@@ -920,7 +1223,7 @@ def generate_advisory_chart(
             yaxis=dict(gridcolor="#f1f5f9", tickprefix="₹"),
             showlegend=False,
         )
-        title = "Liquid Reserves vs Multi-Family Office 6-Month Safety Mandate"
+        title = "Liquid Reserves vs 6-Month Safety Mandate"
         subtitle = f"Current liquid reserves of ₹{tot_liq:,.0f} cover {kpis['runway_months']:.1f} months. An exact capital allocation of ₹{deficit:,.0f} reaches the 6-month safety threshold of ₹{target_6m:,.0f}."
 
     elif chosen_mode == "Strategic Action Impact Matrix":
@@ -1007,7 +1310,7 @@ header_html = """
         <div class="vp-logo-badge">VP</div>
         <div>
             <div class="vp-brand-name">VantagePoint</div>
-            <div class="vp-brand-sub">Asset Vantage Private Wealth</div>
+            <div class="vp-brand-sub">Financial Intelligence Platform</div>
         </div>
     </div>
     <div style="display: flex; align-items: center; gap: 1.25rem;">
@@ -1088,39 +1391,40 @@ with kpi_c5:
 active_kpi = st.session_state["active_card"]
 
 if active_kpi == "Health Score":
-    st.markdown(
-        f"""
-        <div class="inspector-box">
-            <div class="inspector-header">
-                <span class="inspector-title">Health Score Breakdown: <b style="color: #007bff;">{kpis['health_score']} / 100</b></span>
-                <span class="pill-info">4-PILLAR WEIGHTED SOLVENCY INDEX</span>
+    with st.expander("4-PILLAR WEIGHTED SOLVENCY INDEX (Click to view full scoring model)", expanded=False):
+        st.markdown(
+            f"""
+            <div class="inspector-box" style="margin-top: 0; box-shadow: none;">
+                <div class="inspector-header">
+                    <span class="inspector-title">Health Score Breakdown: <b style="color: #007bff;">{kpis['health_score']} / 100</b></span>
+                    <span class="pill-info">4-PILLAR WEIGHTED SOLVENCY INDEX</span>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.85rem;">
+                    <div style="background: #f8fafc; padding: 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0;">
+                        <div style="font-size: 0.72rem; color: #64748b; font-weight: 700;">1. SAVINGS RATE (25 PTS)</div>
+                        <div style="font-size: 1.2rem; font-weight: 800; color: #10b981;">{kpis['s_savings']:.1f} / 25</div>
+                        <div style="font-size: 0.74rem; color: #0f172a;">Actual: <b>{kpis['savings_rate']:.1f}%</b></div>
+                    </div>
+                    <div style="background: #f8fafc; padding: 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0;">
+                        <div style="font-size: 0.72rem; color: #64748b; font-weight: 700;">2. DTI RATIO (25 PTS)</div>
+                        <div style="font-size: 1.2rem; font-weight: 800; color: #10b981;">{kpis['s_debt']:.1f} / 25</div>
+                        <div style="font-size: 0.74rem; color: #0f172a;">Actual: <b>{kpis['dti']:.1f}%</b> (Safe &lt; 20%)</div>
+                    </div>
+                    <div style="background: #f8fafc; padding: 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0;">
+                        <div style="font-size: 0.72rem; color: #64748b; font-weight: 700;">3. EMERGENCY RUNWAY (25 PTS)</div>
+                        <div style="font-size: 1.2rem; font-weight: 800; color: #f59e0b;">{kpis['s_runway']:.1f} / 25</div>
+                        <div style="font-size: 0.74rem; color: #0f172a;">Actual: <b>{kpis['runway_months']:.1f} mos</b> (Target: 6.0)</div>
+                    </div>
+                    <div style="background: #f8fafc; padding: 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0;">
+                        <div style="font-size: 0.72rem; color: #64748b; font-weight: 700;">4. SPENDING STABILITY (25 PTS)</div>
+                        <div style="font-size: 1.2rem; font-weight: 800; color: #f59e0b;">{kpis['s_drift']:.1f} / 25</div>
+                        <div style="font-size: 0.74rem; color: #0f172a;">Recent: <b>+{kpis['drift_expansion_pct']:.1f}%</b> drift</div>
+                    </div>
+                </div>
             </div>
-            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.85rem;">
-                <div style="background: #f8fafc; padding: 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0;">
-                    <div style="font-size: 0.72rem; color: #64748b; font-weight: 700;">1. SAVINGS RATE (25 PTS)</div>
-                    <div style="font-size: 1.2rem; font-weight: 800; color: #10b981;">{kpis['s_savings']:.1f} / 25</div>
-                    <div style="font-size: 0.74rem; color: #0f172a;">Actual: <b>{kpis['savings_rate']:.1f}%</b></div>
-                </div>
-                <div style="background: #f8fafc; padding: 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0;">
-                    <div style="font-size: 0.72rem; color: #64748b; font-weight: 700;">2. DTI RATIO (25 PTS)</div>
-                    <div style="font-size: 1.2rem; font-weight: 800; color: #10b981;">{kpis['s_debt']:.1f} / 25</div>
-                    <div style="font-size: 0.74rem; color: #0f172a;">Actual: <b>{kpis['dti']:.1f}%</b> (Safe &lt; 20%)</div>
-                </div>
-                <div style="background: #f8fafc; padding: 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0;">
-                    <div style="font-size: 0.72rem; color: #64748b; font-weight: 700;">3. EMERGENCY RUNWAY (25 PTS)</div>
-                    <div style="font-size: 1.2rem; font-weight: 800; color: #f59e0b;">{kpis['s_runway']:.1f} / 25</div>
-                    <div style="font-size: 0.74rem; color: #0f172a;">Actual: <b>{kpis['runway_months']:.1f} mos</b> (Target: 6.0)</div>
-                </div>
-                <div style="background: #f8fafc; padding: 0.75rem; border-radius: 8px; border: 1px solid #e2e8f0;">
-                    <div style="font-size: 0.72rem; color: #64748b; font-weight: 700;">4. SPENDING STABILITY (25 PTS)</div>
-                    <div style="font-size: 1.2rem; font-weight: 800; color: #f59e0b;">{kpis['s_drift']:.1f} / 25</div>
-                    <div style="font-size: 0.74rem; color: #0f172a;">Recent: <b>+{kpis['drift_expansion_pct']:.1f}%</b> drift</div>
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+            """,
+            unsafe_allow_html=True,
+        )
 
 elif active_kpi == "Net Worth":
     st.markdown(
@@ -1328,6 +1632,51 @@ with tab_overview:
             """,
             unsafe_allow_html=True,
         )
+
+    # 6 Core Financial Inquiries Executive Briefing
+    st.markdown(
+        f"""
+        <div class='vp-card' style='margin-bottom: 1.25rem;'>
+            <div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem;'>
+                <div class='vp-card-title' style='margin-bottom: 0;'>Strategic Executive Briefing (6 Core Financial Inquiries)</div>
+                <span class='pill-info'>Automated Synthesis</span>
+            </div>
+            <div style='display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.85rem;'>
+                <div style='background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.75rem 0.85rem;'>
+                    <div style='font-size: 0.74rem; font-weight: 700; color: #007bff; margin-bottom: 0.2rem;'>1. HOW MUCH DO WE EARN?</div>
+                    <div style='font-size: 1.15rem; font-weight: 800; color: #0f172a;'>₹{kpis['avg_monthly_income']:,.0f} <span style='font-size: 0.75rem; font-weight: 500; color: #64748b;'>/ mo</span></div>
+                    <div style='font-size: 0.75rem; color: #475569; margin-top: 0.2rem;'>Tech salary ₹3.30L/mo + consulting credits</div>
+                </div>
+                <div style='background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.75rem 0.85rem;'>
+                    <div style='font-size: 0.74rem; font-weight: 700; color: #ef4444; margin-bottom: 0.2rem;'>2. WHERE DOES THE MONEY GO?</div>
+                    <div style='font-size: 1.15rem; font-weight: 800; color: #0f172a;'>₹{kpis['recent_burn']:,.0f} <span style='font-size: 0.75rem; font-weight: 500; color: #64748b;'>/ mo burn</span></div>
+                    <div style='font-size: 0.75rem; color: #475569; margin-top: 0.2rem;'>Rent (₹55K), Debt (₹46.7K), Food (₹34.6K)</div>
+                </div>
+                <div style='background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.75rem 0.85rem;'>
+                    <div style='font-size: 0.74rem; font-weight: 700; color: #10b981; margin-bottom: 0.2rem;'>3. ARE WE SAVING ENOUGH?</div>
+                    <div style='font-size: 1.15rem; font-weight: 800; color: #10b981;'>{kpis['savings_rate']:.1f}% <span style='font-size: 0.75rem; font-weight: 500; color: #047857;'>(Healthy)</span></div>
+                    <div style='font-size: 0.75rem; color: #475569; margin-top: 0.2rem;'>Net monthly surplus: +₹{(kpis['avg_monthly_income'] - kpis['avg_monthly_expense']):,.0f}/mo</div>
+                </div>
+                <div style='background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.75rem 0.85rem;'>
+                    <div style='font-size: 0.74rem; font-weight: 700; color: #6366f1; margin-bottom: 0.2rem;'>4. CAN WE HANDLE OUR DEBT?</div>
+                    <div style='font-size: 1.15rem; font-weight: 800; color: #0f172a;'>{kpis['dti']:.1f}% DTI <span style='font-size: 0.75rem; font-weight: 500; color: #10b981;'>(&lt;35% safe)</span></div>
+                    <div style='font-size: 0.75rem; color: #475569; margin-top: 0.2rem;'>Prepay 32% APR Card L003 (save ₹21.8K/yr)</div>
+                </div>
+                <div style='background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.75rem 0.85rem;'>
+                    <div style='font-size: 0.74rem; font-weight: 700; color: #f59e0b; margin-bottom: 0.2rem;'>5. WHAT CHANGED RECENTLY?</div>
+                    <div style='font-size: 1.15rem; font-weight: 800; color: #d97706;'>+{kpis['drift_expansion_pct']:.1f}% Drift</div>
+                    <div style='font-size: 0.75rem; color: #475569; margin-top: 0.2rem;'>Other (+100%), Shopping (+74%), Food (+48%)</div>
+                </div>
+                <div style='background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0.75rem 0.85rem;'>
+                    <div style='font-size: 0.74rem; font-weight: 700; color: #0d9488; margin-bottom: 0.2rem;'>6. WHAT SHOULD WE DO NEXT?</div>
+                    <div style='font-size: 1.15rem; font-weight: 800; color: #0f172a;'>3 Strategic Moves</div>
+                    <div style='font-size: 0.75rem; color: #475569; margin-top: 0.2rem;'>Prepay Card L003, Cap Other, Fund 6M Runway</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     # RECENT TRANSACTIONS LOG ON FIRST PAGE ONLY (WITH USER OVERRIDE FOR ANOMALIES)
     st.markdown("<div class='vp-card'><div class='vp-card-title'>Recent Transactions Log (Interactive Anomaly Review)</div>", unsafe_allow_html=True)
@@ -1545,7 +1894,7 @@ with tab_alerts:
 # ==============================================================================
 
 with tab_advisory:
-    st.markdown("<div class='vp-card'><div class='vp-card-title'>Executive Family Office Advisory Memorandum</div>", unsafe_allow_html=True)
+    st.markdown("<div class='vp-card'><div class='vp-card-title'>Strategic Financial Advisory Memorandum</div>", unsafe_allow_html=True)
     st.markdown(
         f"""
         <div style="font-size: 0.88rem; line-height: 1.65; color: #334155;">
@@ -1579,24 +1928,29 @@ with tab_advisory:
         unsafe_allow_html=True,
     )
 
-    # 5 Preset Quick-Prompt Chips
-    q_col1, q_col2, q_col3, q_col4, q_col5 = st.columns(5)
+    # 6 Core Strategic Inquiries Matching Presentation Requirements
+    st.markdown("<div style='font-size: 0.74rem; font-weight: 700; color: #475569; margin-bottom: 0.4rem; text-transform: uppercase;'>Core Strategic Questions:</div>", unsafe_allow_html=True)
+    p_r1_c1, p_r1_c2, p_r1_c3 = st.columns(3)
+    p_r2_c1, p_r2_c2, p_r2_c3 = st.columns(3)
     preset_clicked = None
-    with q_col1:
+    with p_r1_c1:
+        if st.button("How much do we earn?", key="btn_q_earn", use_container_width=True):
+            preset_clicked = "How much do we earn?"
+    with p_r1_c2:
+        if st.button("Where does the money go?", key="btn_q_where", use_container_width=True):
+            preset_clicked = "Where does the money go?"
+    with p_r1_c3:
+        if st.button("Are we saving enough?", key="btn_q_saving", use_container_width=True):
+            preset_clicked = "Are we saving enough?"
+    with p_r2_c1:
         if st.button("Can we handle our debt?", key="btn_q_debt", use_container_width=True):
             preset_clicked = "Can we handle our debt?"
-    with q_col2:
+    with p_r2_c2:
         if st.button("What changed recently?", key="btn_q_recent", use_container_width=True):
             preset_clicked = "What changed recently?"
-    with q_col3:
+    with p_r2_c3:
         if st.button("What should we do next?", key="btn_q_next", use_container_width=True):
             preset_clicked = "What should we do next?"
-    with q_col4:
-        if st.button("How is our 6M runway?", key="btn_q_runway", use_container_width=True):
-            preset_clicked = "How is our 6-month safety runway?"
-    with q_col5:
-        if st.button("Which expenses are leaking?", key="btn_q_leak", use_container_width=True):
-            preset_clicked = "Which categories are leaking the most?"
 
     # Custom Question Form (Pressing Enter automatically submits!)
     with st.form(key="advisory_query_form", clear_on_submit=False):
@@ -1662,19 +2016,24 @@ with tab_advisory:
             unsafe_allow_html=True,
         )
 
+        q_days, _, _, _, _, _, _ = parse_date_window_query(disp_q, df_txn)
+        view_options = ["Auto (Query-Matched)"]
+        if q_days:
+            view_options.append(f"Custom Timeline (Last {q_days} Days)")
+        view_options.extend([
+            "Monthly Cash Flow by Date",
+            "Spending Drift & Category Breakdown",
+            "Liabilities & Interest Drag",
+            "Liquidity Runway vs 6-Month Mandate",
+            "Net Worth & Multi-Asset Allocation",
+            "Strategic Action Impact Matrix",
+        ])
+
         c_view_sel, c_slider_chk = st.columns([3, 1])
         with c_view_sel:
             chosen_view = st.selectbox(
                 "Select Metric / Graph Perspective:",
-                [
-                    "Auto (Query-Matched)",
-                    "Monthly Cash Flow by Date",
-                    "Spending Drift & Category Breakdown",
-                    "Liabilities & Interest Drag",
-                    "Liquidity Runway vs 6-Month Mandate",
-                    "Net Worth & Multi-Asset Allocation",
-                    "Strategic Action Impact Matrix",
-                ],
+                view_options,
                 key="adv_chart_selector",
                 help="Switch perspective to explore different angles of the portfolio",
             )

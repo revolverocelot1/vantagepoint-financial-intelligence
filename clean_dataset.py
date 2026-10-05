@@ -1,6 +1,6 @@
 """
 clean_dataset.py: Forensic Data Cleaning & Sanitation Engine
-Asset Vantage Analytics Challenge
+VantagePoint Forensic Data Hygiene Pipeline
 
 Applies rigorous data transformations based on the forensic audit:
   1. Deduplicates true double-charge transactions (T0410).
