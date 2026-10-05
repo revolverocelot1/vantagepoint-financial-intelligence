@@ -1,8 +1,6 @@
 # VantagePoint | Asset Vantage Financial Intelligence Platform
 
-VantagePoint is an enterprise-grade financial analytics, forensic anomaly detection, and portfolio solvency platform built for Multi-Family Offices and High-Net-Worth individuals.
-
-Designed following the visual identity and institutional workflows of [Asset Vantage](https://www.assetvantage.com/).
+VantagePoint is an enterprise-grade financial analytics, forensic anomaly detection, and portfolio solvency platform. 
 
 ---
 
