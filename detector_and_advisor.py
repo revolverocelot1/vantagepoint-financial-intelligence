@@ -667,7 +667,7 @@ Keep tone executive, institutional, and direct. Do NOT use bullet points; provid
         from google.genai import types
 
         client = genai.Client(api_key=resolved_api_key)
-        candidate_models = [model_name, "gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-flash-latest"]
+        candidate_models = ["gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-flash-lite-latest", model_name, "gemini-2.5-flash"]
         # De-duplicate while preserving order
         candidate_models = list(dict.fromkeys(candidate_models))
 

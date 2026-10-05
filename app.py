@@ -605,7 +605,12 @@ def query_gemini_api(prompt: str) -> Optional[str]:
     except ImportError:
         return None
 
-    candidate_models = ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-flash-latest"]
+    candidate_models = [
+        "gemini-3.1-flash-lite",
+        "gemini-flash-latest",
+        "gemini-flash-lite-latest",
+        "gemini-2.5-flash",
+    ]
     for key in candidate_keys:
         try:
             client = genai.Client(api_key=key)
@@ -780,6 +785,16 @@ def query_local_advisor(
             f"• **Recommended Move:** Prepay Credit Card L003 in full immediately to capture ₹21,760/yr in interest savings and release ₹7,000/mo cash flow."
         )
 
+    # 5B. Major Purchase & Car Affordability Analysis
+    if any(w in q_lower for w in ["car", "vehicle", "auto", "buy a car", "buy car", "purchase a car", "buy a house", "afford"]):
+        return (
+            f"Your liabilities, debt drag, and vehicle asset analysis is displayed below.\n\n"
+            f"• **Affordability Verdict:** **Not Recommended Currently**.\n"
+            f"• **Existing Vehicle & Debt:** You already own a Vehicle valued at **₹6,50,000** and carry an active Car Loan (L002) of **₹4,20,000** (9.1% APR, EMI: ₹11,200/mo).\n"
+            f"• **Debt & Liquidity Risks:** Adding another car EMI will push your DTI from **17.5%** toward **23-25%**, exceeding safe debt limits. Furthermore, your liquid runway has a **₹{kpis['runway_deficit']:,.0f} deficit** against the 6-month safety mandate.\n"
+            f"• **Recommended Sequence:** First prepay the 32.0% APR Credit Card L003 (₹68,000) and top up your emergency fund to 6 months before taking on new vehicle financing."
+        )
+
     # 6. Core Question 5: What changed recently?
     if any(w in q_lower for w in ["change", "recent", "drift", "trend", "surge", "spike", "grow", "burn", "outflow", "what changed"]):
         return (
@@ -887,6 +902,7 @@ Client Verified Financial Fundamentals:
 - DTI Ratio: {kpis['dti']:.1f}% (Monthly EMIs: INR {kpis['total_emi']:,.0f})
 - Emergency Liquid Runway: {kpis['runway_months']:.1f} months (Liquid Reserves: INR {kpis['liquid_assets']:,.0f} vs 6M Mandate INR {kpis['target_6m_runway']:,.0f}, Deficit: INR {kpis['runway_deficit']:,.0f})
 - Critical Debt: Credit Card L003 has INR 68,000 at 32.0% APR (Due today, EMI INR 7,000/mo, Annual Drag INR 21,760)
+- Existing Vehicle & Loan: Already owns a Vehicle (Asset A007, value INR 650,000) and carries Car Loan L002 of INR 420,000 (9.1% APR, EMI INR 11,200/mo)
 - Fastest Expanding Categories: 'Other' (+100.0%), 'Shopping' (+74.2%), 'Food' (+48.2%)
 - Outlier Flag: Txn T0488 (INR 1,85,000 Mobile bill under Utilities, Z=17.61)
 {window_context}
@@ -895,13 +911,14 @@ User Query: "{query}"
 CRITICAL INSTRUCTIONS:
 1. The requested visual graph HAS ALREADY BEEN GENERATED AND IS DISPLAYED DIRECTLY BELOW YOUR ANSWER. NEVER state that you 'cannot generate a graph', 'cannot produce visual charts', or that you are a 'text-based AI'. Always acknowledge that the interactive chart is rendered below.
 2. NO YAPPING. Keep your response strictly structured, concise, and to the point using clean bullet points (maximum 3-4 bullets total).
-3. Do NOT pretend to be part of Asset Vantage or use family office roleplay jargon. Be factual, direct, and professional.
-4. Directly state the exact requested numbers, metrics, and dates.
-5. If the requested time window has INR 0 earnings (e.g. last 15 days), state directly that INR 0 was recorded in this window and mention the previous credit date and amount.
+3. If the user asks about buying a car, vehicle, or making a major purchase, evaluate affordability directly based on their existing car loan L002, DTI capacity, and liquid reserves.
+4. Do NOT pretend to be part of Asset Vantage or use family office roleplay jargon. Be factual, direct, and professional.
+5. Directly state the exact requested numbers, metrics, and dates.
+6. If the requested time window has INR 0 earnings (e.g. last 15 days), state directly that INR 0 was recorded in this window and mention the previous credit date and amount.
 """
     gemini_ans = query_gemini_api(prompt)
     if gemini_ans:
-        return gemini_ans, "Gemini 2.5 Flash"
+        return gemini_ans, "Gemini AI Copilot"
 
     local_ans = query_local_advisor(query, kpis, df_txn, df_asset, df_liab)
     return local_ans, "Quantitative Intelligence Copilot"
@@ -1077,7 +1094,7 @@ def generate_advisory_chart(
             chosen_mode = "Spending Drift & Category Breakdown"
         elif any(w in q_lower for w in ["are we saving enough", "saving enough", "savings rate", "save enough", "savings", "surplus"]):
             chosen_mode = "Monthly Cash Flow by Date"
-        elif any(w in q_lower for w in ["can we handle our debt", "handle debt", "debt", "liabilit", "loan", "credit card", "apr", "interest", "emi", "drag", "dti"]):
+        elif any(w in q_lower for w in ["can we handle our debt", "handle debt", "debt", "liabilit", "loan", "credit card", "apr", "interest", "emi", "drag", "dti", "car", "vehicle", "buy", "afford", "purchase"]):
             chosen_mode = "Liabilities & Interest Drag"
         elif any(w in q_lower for w in ["what changed recently", "what changed", "change", "recent", "drift", "trend", "spike", "outlier"]):
             chosen_mode = "Spending Drift & Category Breakdown"
