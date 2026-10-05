@@ -1,6 +1,7 @@
 # Private Technical Explainer (Confidential)
 SYSTEM_ARCHITECTURE_AND_MATH_EXPLAINER.md
 *.private.md
+presentation_slides/
 .env
 .env.*
 .streamlit/secrets.toml

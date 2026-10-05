@@ -18,16 +18,33 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+import base64
+from PIL import Image
+
 try:
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent / ".env")
 except Exception:
     pass
 
+# Load custom VantagePoint icon
+ICON_PATH = Path(__file__).resolve().parent / "icon.png"
+app_icon = None
+icon_base64 = ""
+if ICON_PATH.exists():
+    try:
+        app_icon = Image.open(ICON_PATH)
+        with open(ICON_PATH, "rb") as f:
+            icon_base64 = base64.b64encode(f.read()).decode("utf-8")
+    except Exception:
+        app_icon = "🔷"
+else:
+    app_icon = "🔷"
+
 # Configure page settings
 st.set_page_config(
     page_title="VantagePoint | Financial Intelligence",
-    page_icon="🔷",
+    page_icon=app_icon,
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -39,6 +56,29 @@ st.set_page_config(
 CUSTOM_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+/* 100% remove Streamlit upper header bar, Deploy button, and hamburger menu */
+header[data-testid="stHeader"], [data-testid="stHeader"] {
+    display: none !important;
+    visibility: hidden !important;
+    height: 0px !important;
+}
+[data-testid="stToolbar"] {
+    display: none !important;
+    visibility: hidden !important;
+}
+.stDeployButton {
+    display: none !important;
+    visibility: hidden !important;
+}
+#MainMenu {
+    display: none !important;
+    visibility: hidden !important;
+}
+footer {
+    display: none !important;
+    visibility: hidden !important;
+}
 
 :root {
     --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -64,7 +104,7 @@ html, body, [class*="css"] {
 }
 
 .block-container {
-    padding-top: 1rem !important;
+    padding-top: 1.25rem !important;
     padding-bottom: 3.5rem !important;
     max-width: 1440px !important;
 }
@@ -1304,10 +1344,12 @@ def generate_advisory_chart(
 # 5. HEADER BAR & EXECUTIVE BANNER
 # ==============================================================================
 
-header_html = """
+logo_badge_html = f'<img src="data:image/png;base64,{icon_base64}" style="width: 36px; height: 36px; border-radius: 8px; object-fit: cover; box-shadow: 0 2px 6px rgba(0,0,0,0.12); flex-shrink: 0;" />' if icon_base64 else '<div class="vp-logo-badge">VP</div>'
+
+header_html = f"""
 <div class="vp-header">
     <div class="vp-brand">
-        <div class="vp-logo-badge">VP</div>
+        {logo_badge_html}
         <div>
             <div class="vp-brand-name">VantagePoint</div>
             <div class="vp-brand-sub">Financial Intelligence Platform</div>
